@@ -103,7 +103,7 @@ fn local_retrieve(query: &str, config: &Config) -> Vec<Memory> {
         })
         .collect();
 
-    scored.sort_by(|a, b| b.rank_key().0.cmp(&a.rank_key().0));
+    scored.sort_by_key(|m| std::cmp::Reverse(m.rank_key().0));
     scored.truncate(TOP_K);
     scored
 }
@@ -124,7 +124,11 @@ fn jaccard(a: &[String], b: &[String]) -> f32 {
     let set_b: std::collections::HashSet<&String> = b.iter().collect();
     let inter = set_a.intersection(&set_b).count() as f32;
     let union = set_a.union(&set_b).count() as f32;
-    if union == 0.0 { 0.0 } else { inter / union }
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 // ── Qdrant mode (optional, embeddings via llama-server) ─────────────────────
@@ -187,7 +191,12 @@ async fn qdrant_retrieve(url: &str, query: &str, config: &Config) -> anyhow::Res
     Ok(hits)
 }
 
-async fn qdrant_store(url: &str, prompt: &str, response: &str, config: &Config) -> anyhow::Result<()> {
+async fn qdrant_store(
+    url: &str,
+    prompt: &str,
+    response: &str,
+    config: &Config,
+) -> anyhow::Result<()> {
     let vector = embed(prompt, config).await?;
     let point = json!({
         "points": [{

@@ -42,17 +42,23 @@ pub async fn maybe_critique(
 
     let critique_result = timeout(
         Duration::from_secs(CRITIQUE_TIMEOUT_SECS),
-        brain::infer(client, config, critique_messages, temperature, 512, false, json!({})),
+        brain::infer(
+            client,
+            config,
+            critique_messages,
+            temperature,
+            512,
+            false,
+            json!({}),
+        ),
     )
     .await;
 
     let critique_text = match critique_result {
-        Ok(Ok(BrainResponse::Complete(v))) => {
-            match brain::extract_content(&v) {
-                Some(t) => t.to_string(),
-                None => return (response.clone(), false),
-            }
-        }
+        Ok(Ok(BrainResponse::Complete(v))) => match brain::extract_content(&v) {
+            Some(t) => t.to_string(),
+            None => return (response.clone(), false),
+        },
         _ => return (response.clone(), false),
     };
 
@@ -82,7 +88,15 @@ pub async fn maybe_critique(
 
     let fix_result = timeout(
         Duration::from_secs(FIX_TIMEOUT_SECS),
-        brain::infer(client, config, fix_messages, temperature, 2048, false, json!({})),
+        brain::infer(
+            client,
+            config,
+            fix_messages,
+            temperature,
+            2048,
+            false,
+            json!({}),
+        ),
     )
     .await;
 

@@ -13,13 +13,10 @@ pub struct Constitutions {
 }
 
 pub fn attest_binary(config: &Config) -> Result<()> {
-    fs::create_dir_all(&config.ram_moat)
-        .context("Failed to create RAM moat directory")?;
+    fs::create_dir_all(&config.ram_moat).context("Failed to create RAM moat directory")?;
 
-    let exe_path = std::fs::read_link("/proc/self/exe")
-        .context("Cannot read /proc/self/exe")?;
-    let mut file = fs::File::open(&exe_path)
-        .context("Cannot open self binary")?;
+    let exe_path = std::fs::read_link("/proc/self/exe").context("Cannot read /proc/self/exe")?;
+    let mut file = fs::File::open(&exe_path).context("Cannot open self binary")?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
 

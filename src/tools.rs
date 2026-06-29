@@ -74,20 +74,25 @@ async fn dispatch_tool(name: &str, args: &Value, _config: &Config) -> Result<Str
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing path"))?;
-            Ok(std::fs::read_to_string(path)
-                .unwrap_or_else(|e| format!("read error: {e}")))
+            Ok(std::fs::read_to_string(path).unwrap_or_else(|e| format!("read error: {e}")))
         }
         "write_file" => {
-            let path = args.get("path").and_then(|v| v.as_str())
+            let path = args
+                .get("path")
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing path"))?;
-            let content = args.get("content").and_then(|v| v.as_str())
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing content"))?;
             std::fs::write(path, content)?;
             Ok(format!("written {} bytes to {path}", content.len()))
         }
         "get_weather" | "search" | "web_search" => {
             // Stub for external tools — return informative placeholder
-            Ok(format!("Tool `{name}` not yet wired to external API. Args: {args}"))
+            Ok(format!(
+                "Tool `{name}` not yet wired to external API. Args: {args}"
+            ))
         }
         _ => Ok(format!("Unknown tool `{name}`. Args: {args}")),
     }
@@ -99,36 +104,57 @@ async fn sandbox_exec(cmd: &str) -> Result<String> {
         || std::path::Path::new("/usr/local/bin/bwrap").exists();
 
     let output = if bwrap {
-        timeout(Duration::from_secs(TOOL_TIMEOUT_SECS), tokio::task::spawn_blocking({
-            let cmd = cmd.to_string();
-            move || {
-                Command::new("bwrap")
-                    .args([
-                        "--ro-bind", "/usr", "/usr",
-                        "--ro-bind", "/lib", "/lib",
-                        "--ro-bind", "/lib64", "/lib64",
-                        "--ro-bind", "/bin", "/bin",
-                        "--proc", "/proc",
-                        "--dev", "/dev",
-                        "--tmpfs", "/tmp",
-                        "--unshare-net",
-                        "--unshare-pid",
-                        "--die-with-parent",
-                        "bash", "-c", &cmd,
-                    ])
-                    .output()
-            }
-        })).await
+        timeout(
+            Duration::from_secs(TOOL_TIMEOUT_SECS),
+            tokio::task::spawn_blocking({
+                let cmd = cmd.to_string();
+                move || {
+                    Command::new("bwrap")
+                        .args([
+                            "--ro-bind",
+                            "/usr",
+                            "/usr",
+                            "--ro-bind",
+                            "/lib",
+                            "/lib",
+                            "--ro-bind",
+                            "/lib64",
+                            "/lib64",
+                            "--ro-bind",
+                            "/bin",
+                            "/bin",
+                            "--proc",
+                            "/proc",
+                            "--dev",
+                            "/dev",
+                            "--tmpfs",
+                            "/tmp",
+                            "--unshare-net",
+                            "--unshare-pid",
+                            "--die-with-parent",
+                            "bash",
+                            "-c",
+                            &cmd,
+                        ])
+                        .output()
+                }
+            }),
+        )
+        .await
     } else {
         // Fallback: restricted bash with no network, time limit
-        timeout(Duration::from_secs(TOOL_TIMEOUT_SECS), tokio::task::spawn_blocking({
-            let cmd = cmd.to_string();
-            move || {
-                Command::new("bash")
-                    .args(["-c", &format!("timeout 25 bash -c {}", shell_escape(&cmd))])
-                    .output()
-            }
-        })).await
+        timeout(
+            Duration::from_secs(TOOL_TIMEOUT_SECS),
+            tokio::task::spawn_blocking({
+                let cmd = cmd.to_string();
+                move || {
+                    Command::new("bash")
+                        .args(["-c", &format!("timeout 25 bash -c {}", shell_escape(&cmd))])
+                        .output()
+                }
+            }),
+        )
+        .await
     };
 
     match output {
@@ -138,7 +164,12 @@ async fn sandbox_exec(cmd: &str) -> Result<String> {
             if out.status.success() {
                 Ok(stdout.trim().to_string())
             } else {
-                Ok(format!("exit {}: {}\n{}", out.status.code().unwrap_or(-1), stdout.trim(), stderr.trim()))
+                Ok(format!(
+                    "exit {}: {}\n{}",
+                    out.status.code().unwrap_or(-1),
+                    stdout.trim(),
+                    stderr.trim()
+                ))
             }
         }
         Ok(Ok(Err(e))) => Err(anyhow::anyhow!("exec failed: {e}")),

@@ -84,7 +84,9 @@ async fn call_with_retry(client: &Client, url: &str, body: &Value) -> Result<Val
         return retry.json::<Value>().await.context("Invalid JSON on retry");
     }
 
-    resp.json::<Value>().await.context("Invalid JSON response from llama-server")
+    resp.json::<Value>()
+        .await
+        .context("Invalid JSON response from llama-server")
 }
 
 pub fn extract_content(response: &Value) -> Option<&str> {

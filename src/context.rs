@@ -48,16 +48,23 @@ pub fn assemble(
     };
 
     // Token budget enforcement (~4 chars/token)
-    let system_chars: usize = result.iter().map(|m| {
-        m.get("content").and_then(|c| c.as_str()).unwrap_or("").len()
-    }).sum();
+    let system_chars: usize = result
+        .iter()
+        .map(|m| {
+            m.get("content")
+                .and_then(|c| c.as_str())
+                .unwrap_or("")
+                .len()
+        })
+        .sum();
 
     let budget_chars = MAX_TOKENS * CHARS_PER_TOKEN;
     let mut used = system_chars;
 
     let mut trimmed: Vec<Value> = Vec::new();
     for msg in windowed.iter().rev() {
-        let msg_chars = msg.get("content")
+        let msg_chars = msg
+            .get("content")
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .len();
@@ -111,12 +118,19 @@ mod tests {
     #[test]
     fn memory_folded_into_single_system_message() {
         let c = make_constitutions();
-        let mems = vec![Memory { content: "prev session".into(), score: 0.9, source: "qdrant".into() }];
+        let mems = vec![Memory {
+            content: "prev session".into(),
+            score: 0.9,
+            source: "qdrant".into(),
+        }];
         let msgs = vec![json!({"role": "user", "content": "hi"})];
         let result = assemble(&c, &mems, "SYS", &msgs);
         // Exactly one system message (template requirement); memory lives inside it.
         let system_msgs = result.iter().filter(|m| m["role"] == "system").count();
         assert_eq!(system_msgs, 1);
-        assert!(result[0]["content"].as_str().unwrap().contains("prev session"));
+        assert!(result[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("prev session"));
     }
 }

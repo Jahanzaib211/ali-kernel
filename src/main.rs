@@ -49,7 +49,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::load()?;
-    info!("Config loaded — gateway port {}, llama port {}", config.gateway_port, config.llama_port);
+    info!(
+        "Config loaded — gateway port {}, llama port {}",
+        config.gateway_port, config.llama_port
+    );
 
     config.check_llama_health().await?;
     info!("llama-server health: OK");
@@ -126,18 +129,30 @@ async fn chat_handler(
     let messages = match body.get("messages").and_then(|m| m.as_array()) {
         Some(m) if !m.is_empty() => m.clone(),
         _ => {
-            return (StatusCode::BAD_REQUEST, Json(json!({
-                "error": "messages array is required and must not be empty"
-            }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "messages array is required and must not be empty"
+                })),
+            )
+                .into_response();
         }
     };
 
     let temperature = body.get("temperature").and_then(|v| v.as_f64());
-    let max_tokens = body.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(2048);
-    let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(2048);
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // L3: Semantic routing
-    let last_user_msg = messages.iter().rev()
+    let last_user_msg = messages
+        .iter()
+        .rev()
         .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
         .and_then(|m| m.get("content").and_then(|c| c.as_str()))
         .unwrap_or("");
@@ -177,10 +192,16 @@ async fn chat_handler(
         max_tokens,
         stream,
         extra,
-    ).await {
+    )
+    .await
+    {
         Err(e) => {
             tracing::error!("Brain error: {e}");
-            (StatusCode::BAD_GATEWAY, Json(json!({"error": e.to_string()}))).into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
         }
 
         Ok(brain::BrainResponse::Streaming(s)) => {
@@ -204,18 +225,12 @@ async fn chat_handler(
 
         Ok(brain::BrainResponse::Complete(response)) => {
             // L7: Agentic tool loop — execute tools, feed results back, repeat
-            let (response, tool_called) = run_agentic_loop(
-                &state,
-                response,
-                assembled_for_loop,
-                final_temp,
-                max_tokens,
-            ).await;
+            let (response, tool_called) =
+                run_agentic_loop(&state, response, assembled_for_loop, final_temp, max_tokens)
+                    .await;
 
             // Capture pre-critique content so a rewrite becomes a DPO pair
-            let original_content = brain::extract_content(&response)
-                .unwrap_or("")
-                .to_string();
+            let original_content = brain::extract_content(&response).unwrap_or("").to_string();
 
             // L8: Critique loop
             let (response, critique_applied) = critique::maybe_critique(
@@ -224,21 +239,26 @@ async fn chat_handler(
                 &state.constitutions,
                 &response,
                 final_temp,
-            ).await;
+            )
+            .await;
 
-            let final_content = brain::extract_content(&response)
-                .unwrap_or("")
-                .to_string();
+            let final_content = brain::extract_content(&response).unwrap_or("").to_string();
 
             // RLAIF data capture (Step 2): SFT always, DPO when critique rewrote
             if let Err(e) = training::log_sft(
-                &state.config.training_dir, &user_prompt, &final_content, &route_name,
+                &state.config.training_dir,
+                &user_prompt,
+                &final_content,
+                &route_name,
             ) {
                 tracing::warn!("SFT log failed: {e}");
             }
             if critique_applied && original_content != final_content {
                 if let Err(e) = training::log_dpo(
-                    &state.config.training_dir, &user_prompt, &final_content, &original_content,
+                    &state.config.training_dir,
+                    &user_prompt,
+                    &final_content,
+                    &original_content,
                 ) {
                     tracing::warn!("DPO log failed: {e}");
                 }
@@ -325,9 +345,16 @@ async fn run_agentic_loop(
 
         // Re-infer with tool outputs in context
         match brain::infer(
-            &state.client, &state.config, conversation.clone(),
-            temperature, max_tokens, false, serde_json::json!({}),
-        ).await {
+            &state.client,
+            &state.config,
+            conversation.clone(),
+            temperature,
+            max_tokens,
+            false,
+            serde_json::json!({}),
+        )
+        .await
+        {
             Ok(brain::BrainResponse::Complete(next)) => response = next,
             _ => break,
         }
@@ -365,7 +392,9 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
             256,
             false,
             json!({}),
-        ).await.is_ok();
+        )
+        .await
+        .is_ok();
 
         results.push(json!({
             "prompt": prompt,
@@ -387,24 +416,29 @@ async fn eval_handler(State(state): State<AppState>) -> Response {
         Ok(report) => Json(json!(serde_json::to_value(&report).unwrap())).into_response(),
         Err(e) => {
             tracing::error!("Eval failed: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": e.to_string()})),
+            )
+                .into_response()
         }
     }
 }
 
 /// POST /feedback — Claude-as-teacher submits a score and optional gold response.
 /// score < 3 with a gold answer writes a DPO preference pair (gold=chosen).
-async fn feedback_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn feedback_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
     let score = body.get("score").and_then(|v| v.as_i64()).unwrap_or(5);
     let gold = body.get("gold").and_then(|v| v.as_str());
     let rejected = body.get("rejected").and_then(|v| v.as_str()).unwrap_or("");
 
     if prompt.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({"error": "prompt required"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "prompt required"})),
+        )
+            .into_response();
     }
 
     let mut wrote_pair = false;
@@ -424,5 +458,6 @@ async fn feedback_handler(
         }
     }
 
-    Json(json!({ "accepted": true, "dpo_pair_written": wrote_pair, "score": score })).into_response()
+    Json(json!({ "accepted": true, "dpo_pair_written": wrote_pair, "score": score }))
+        .into_response()
 }

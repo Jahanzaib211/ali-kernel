@@ -19,9 +19,7 @@ static RE_SECURITY: OnceLock<Regex> = OnceLock::new();
 static RE_SEARCH: OnceLock<Regex> = OnceLock::new();
 
 pub fn classify(query: &str) -> RoutingDecision {
-    let re_quick = RE_QUICK.get_or_init(|| {
-        Regex::new(r"(?i)^(hello|hi|hey|thanks|bye)").unwrap()
-    });
+    let re_quick = RE_QUICK.get_or_init(|| Regex::new(r"(?i)^(hello|hi|hey|thanks|bye)").unwrap());
     let re_security = RE_SECURITY.get_or_init(|| {
         Regex::new(r"(?i)(scan|exploit|hack|inject|sql|nmap|burp|reverseshell|payload)").unwrap()
     });
@@ -30,15 +28,27 @@ pub fn classify(query: &str) -> RoutingDecision {
     });
 
     if re_quick.is_match(query) {
-        return RoutingDecision { strategy: Route::Quick, temperature: 0.0 };
+        return RoutingDecision {
+            strategy: Route::Quick,
+            temperature: 0.0,
+        };
     }
     if re_security.is_match(query) {
-        return RoutingDecision { strategy: Route::Full, temperature: 0.6 };
+        return RoutingDecision {
+            strategy: Route::Full,
+            temperature: 0.6,
+        };
     }
     if re_search.is_match(query) {
-        return RoutingDecision { strategy: Route::Search, temperature: 0.6 };
+        return RoutingDecision {
+            strategy: Route::Search,
+            temperature: 0.6,
+        };
     }
-    RoutingDecision { strategy: Route::Full, temperature: 0.6 }
+    RoutingDecision {
+        strategy: Route::Full,
+        temperature: 0.6,
+    }
 }
 
 #[cfg(test)]

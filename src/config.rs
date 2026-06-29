@@ -19,12 +19,8 @@ impl Config {
     pub fn load() -> Result<Self> {
         dotenvy::dotenv().ok();
 
-        let llama_bin = PathBuf::from(
-            std::env::var("LLAMA_BIN").context("LLAMA_BIN not set")?
-        );
-        let model_path = PathBuf::from(
-            std::env::var("MODEL_PATH").context("MODEL_PATH not set")?
-        );
+        let llama_bin = PathBuf::from(std::env::var("LLAMA_BIN").context("LLAMA_BIN not set")?);
+        let model_path = PathBuf::from(std::env::var("MODEL_PATH").context("MODEL_PATH not set")?);
         let llama_port: u16 = std::env::var("LLAMA_PORT")
             .unwrap_or_else(|_| "8081".into())
             .parse()
@@ -36,17 +32,13 @@ impl Config {
         let system_prompt = std::env::var("SYSTEM_PROMPT")
             .unwrap_or_else(|_| "You are a helpful AI assistant.".into());
         let ram_moat = PathBuf::from(
-            std::env::var("RAM_MOAT").unwrap_or_else(|_| "/tmp/ornith-ram-moat".into())
+            std::env::var("RAM_MOAT").unwrap_or_else(|_| "/tmp/ornith-ram-moat".into()),
         );
-        let log_dir = PathBuf::from(
-            std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".into())
-        );
-        let training_dir = PathBuf::from(
-            std::env::var("TRAINING_DIR").unwrap_or_else(|_| "training".into())
-        );
-        let evals_dir = PathBuf::from(
-            std::env::var("EVALS_DIR").unwrap_or_else(|_| "evals".into())
-        );
+        let log_dir = PathBuf::from(std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".into()));
+        let training_dir =
+            PathBuf::from(std::env::var("TRAINING_DIR").unwrap_or_else(|_| "training".into()));
+        let evals_dir =
+            PathBuf::from(std::env::var("EVALS_DIR").unwrap_or_else(|_| "evals".into()));
         let qdrant_url = std::env::var("QDRANT_URL").ok().filter(|s| !s.is_empty());
 
         if !llama_bin.exists() {
