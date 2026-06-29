@@ -13,22 +13,27 @@ pub fn assemble(
     system_prompt: &str,
     messages: &[Value],
 ) -> Vec<Value> {
-    let system_content = format!(
+    let mut system_content = format!(
         "{}\n\n{}\n\n{}\n\n{}",
         constitutions.soul, constitutions.agent, constitutions.owner, system_prompt
     );
+
+    // Fold retrieved memories into the single leading system message. The chat
+    // template requires exactly one system message at the start; emitting each
+    // memory as its own system message triggers a 400 from llama-server
+    // ("System message must be at the beginning") once memory is populated.
+    if !memories.is_empty() {
+        system_content.push_str("\n\n## Context from previous sessions");
+        for mem in memories {
+            system_content.push_str("\n\n");
+            system_content.push_str(&mem.content);
+        }
+    }
 
     let mut result: Vec<Value> = vec![json!({
         "role": "system",
         "content": system_content
     })];
-
-    for mem in memories {
-        result.push(json!({
-            "role": "system",
-            "content": format!("Context from previous sessions:\n{}", mem.content)
-        }));
-    }
 
     // Keep only last N non-system turns
     let user_turns: Vec<&Value> = messages
@@ -104,11 +109,14 @@ mod tests {
     }
 
     #[test]
-    fn memory_injected_after_system() {
+    fn memory_folded_into_single_system_message() {
         let c = make_constitutions();
         let mems = vec![Memory { content: "prev session".into(), score: 0.9, source: "qdrant".into() }];
         let msgs = vec![json!({"role": "user", "content": "hi"})];
         let result = assemble(&c, &mems, "SYS", &msgs);
-        assert!(result[1]["content"].as_str().unwrap().contains("prev session"));
+        // Exactly one system message (template requirement); memory lives inside it.
+        let system_msgs = result.iter().filter(|m| m["role"] == "system").count();
+        assert_eq!(system_msgs, 1);
+        assert!(result[0]["content"].as_str().unwrap().contains("prev session"));
     }
 }

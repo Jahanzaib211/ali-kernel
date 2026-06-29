@@ -139,7 +139,11 @@ async fn judge(client: &Client, config: &Config, task: &EvalTask, answer: &str) 
     );
     let messages = vec![json!({ "role": "user", "content": prompt })];
 
-    match brain::infer(client, config, messages, 0.0, 16, false, json!({})).await {
+    // Disable the model's thinking block for grading: a reasoning model otherwise
+    // burns the whole token budget inside <think> and emits empty content (score 0).
+    // With thinking off it returns the bare integer in ~2 tokens.
+    let no_think = json!({ "chat_template_kwargs": { "enable_thinking": false } });
+    match brain::infer(client, config, messages, 0.0, 16, false, no_think).await {
         Ok(BrainResponse::Complete(v)) => brain::extract_content(&v)
             .and_then(parse_score)
             .unwrap_or(0),
