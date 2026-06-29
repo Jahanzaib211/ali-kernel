@@ -69,6 +69,9 @@ mod e2e {
             .json::<serde_json::Value>()
             .await
             .unwrap();
-        assert!(resp["choices"].as_array().map(|a| !a.is_empty()).unwrap_or(false));
+        assert!(resp["choices"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false));
     }
 }

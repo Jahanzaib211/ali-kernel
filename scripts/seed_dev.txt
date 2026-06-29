@@ -1,0 +1,30 @@
+Write an axum 0.7 SSE handler in Rust that streams server-sent events from a tokio broadcast channel.
+Explain how to pass chat_template_kwargs through to llama-server from a Rust reqwest client.
+Write a Rust function that computes the SHA-256 hash of a file at a given path using the sha2 crate.
+Show how to build a Merkle tree over a list of byte slices in Rust and verify an inclusion proof.
+Write a tokio background task that polls every 2 seconds and can be cancelled with a CancellationToken.
+Implement a bounded async retry helper in Rust that retries a future up to 3 times on 5xx errors.
+Write a Rust function using std::os::unix to send SIGUSR1 to the current process.
+Explain the difference between std::sync::Mutex and tokio::sync::Mutex in async Rust and when each is safe.
+Write a clap-based CLI in Rust with a subcommand `promote` that takes an id and a content string.
+Show how to embed static files into a Rust binary with rust-embed and serve them from axum.
+Write a Rust function that parses an OpenAI-style tool_call XML block into a JSON object.
+Implement a sliding-window token-budget trimmer for chat messages in Rust capped at 12000 tokens.
+Explain how bubblewrap (bwrap) isolates a process and give a safe flag set for running untrusted bash.
+Write a bash one-liner to find the five largest files under the current directory tree.
+Write an nmap command to scan the top 1000 TCP ports on 10.0.0.0/24 with service version detection.
+Explain how to securely hash and store passwords; name a KDF and sensible parameters.
+Write a Python script that checks whether a password appears in a wordlist file line by line.
+Explain SQL injection and show a parameterized query that prevents it in Rust with sqlx.
+Write a Rust function that validates an environment variable is a valid TCP port or returns an error.
+Show how to do HMAC-SHA256 in Rust with the hmac and sha2 crates and verify a signature.
+Write a JSON Web Token issue-and-verify pair in Rust using the jsonwebtoken crate.
+Explain how speculative decoding works in llama.cpp and what makes a good draft model.
+Write a Rust struct and serde derive for an OpenAI chat completion request body.
+Implement a Jaccard similarity function over two token sets in Rust and explain its range.
+Write a SQL query to find the second highest distinct salary from an employees table.
+Explain continuous batching in an LLM server and how the --parallel slot count affects throughput.
+A bat and a ball cost 1.10 total; the bat costs 1.00 more than the ball; how much is the ball?
+You have a 3-liter and a 5-liter jug; give the steps to measure exactly 4 liters.
+Write a Go function implementing AES-256-GCM encryption with a random nonce.
+Implement a debounce function in JavaScript that delays invoking fn until wait ms after the last call.

@@ -9,3 +9,7 @@ training/
 evals/eval_scores.jsonl
 ornith-generated/
 .claude/
+
+# python
+__pycache__/
+*.pyc
