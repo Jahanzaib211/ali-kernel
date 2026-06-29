@@ -1,0 +1,142 @@
+[
+  {
+    "id": "code-01",
+    "domain": "code",
+    "prompt": "Write a Rust function `fn binary_search(arr: &[i32], target: i32) -> Option<usize>` that returns the index of target or None.",
+    "rubric": "Must be valid Rust, correct binary search logic, returns Option<usize>, handles empty slice without panic.",
+    "max_score": 5
+  },
+  {
+    "id": "code-02",
+    "domain": "code",
+    "prompt": "Write a Python function that reverses a linked list in place. Define the Node class.",
+    "rubric": "Correct in-place reversal, valid Python, handles empty and single-node lists.",
+    "max_score": 5
+  },
+  {
+    "id": "code-03",
+    "domain": "code",
+    "prompt": "Write a SQL query to find the second highest salary from an employees table with columns id, name, salary.",
+    "rubric": "Correct SQL, handles duplicate salaries, returns exactly the second highest distinct value.",
+    "max_score": 5
+  },
+  {
+    "id": "code-04",
+    "domain": "code",
+    "prompt": "Write a bash one-liner that finds the 5 largest files in the current directory tree and prints their sizes.",
+    "rubric": "Valid bash, recursive, sorts by size descending, limits to 5, human-readable sizes preferred.",
+    "max_score": 5
+  },
+  {
+    "id": "code-05",
+    "domain": "code",
+    "prompt": "Implement a debounce function in JavaScript that delays invoking fn until after wait ms have elapsed since the last call.",
+    "rubric": "Correct closure over timer, clears previous timeout, preserves this and arguments, valid JS.",
+    "max_score": 5
+  },
+  {
+    "id": "tool-01",
+    "domain": "tool",
+    "prompt": "You have a tool `bash_exec(command)`. Use it to count the number of words in /etc/hostname.",
+    "rubric": "Issues a correct tool call to bash_exec with a wc-based command targeting /etc/hostname.",
+    "max_score": 5
+  },
+  {
+    "id": "tool-02",
+    "domain": "tool",
+    "prompt": "You have tools `read_file(path)` and `write_file(path, content)`. Read /tmp/a.txt and write its uppercase version to /tmp/b.txt. Describe the tool calls in order.",
+    "rubric": "Correct sequence: read first, transform, then write; correct argument names and paths.",
+    "max_score": 5
+  },
+  {
+    "id": "tool-03",
+    "domain": "tool",
+    "prompt": "Given a `get_weather(city)` tool, what tool call retrieves the weather for Tokyo?",
+    "rubric": "Single correct tool call with city set to Tokyo.",
+    "max_score": 5
+  },
+  {
+    "id": "tool-04",
+    "domain": "tool",
+    "prompt": "You need to find all Python files modified in the last day. Given `bash_exec(command)`, produce the call.",
+    "rubric": "Correct find command with -name '*.py' and -mtime -1 (or equivalent), passed to bash_exec.",
+    "max_score": 5
+  },
+  {
+    "id": "tool-05",
+    "domain": "tool",
+    "prompt": "Two tools are available: search(query) and write_file(path, content). Plan how to research 'Rust async' and save findings to notes.md. List the calls.",
+    "rubric": "Logical multi-step plan: search then write_file; sensible query and path.",
+    "max_score": 5
+  },
+  {
+    "id": "sec-01",
+    "domain": "security",
+    "prompt": "Explain how SQL injection works and show a parameterized query that prevents it in Python with sqlite3.",
+    "rubric": "Accurate explanation of injection, correct parameterized query using ? placeholders, no string concatenation.",
+    "max_score": 5
+  },
+  {
+    "id": "sec-02",
+    "domain": "security",
+    "prompt": "Write an nmap command to scan the top 1000 TCP ports on 192.168.1.0/24 with service version detection.",
+    "rubric": "Valid nmap syntax, -sV for version detection, correct CIDR target, sensible port scope.",
+    "max_score": 5
+  },
+  {
+    "id": "sec-03",
+    "domain": "security",
+    "prompt": "Describe how to securely hash and store user passwords. Name a suitable algorithm and key parameters.",
+    "rubric": "Names a slow KDF (bcrypt/argon2/scrypt), mentions per-user salt, never plain SHA/MD5, mentions work factor.",
+    "max_score": 5
+  },
+  {
+    "id": "sec-04",
+    "domain": "security",
+    "prompt": "Write a Python script that checks if a given password appears in a wordlist file, line by line.",
+    "rubric": "Valid Python, reads file safely, case handling reasonable, returns match boolean.",
+    "max_score": 5
+  },
+  {
+    "id": "sec-05",
+    "domain": "security",
+    "prompt": "Explain the difference between symmetric and asymmetric encryption and give one real-world use of each.",
+    "rubric": "Correct distinction (shared key vs key pair), accurate examples (e.g. AES for data, RSA/TLS handshake).",
+    "max_score": 5
+  },
+  {
+    "id": "reason-01",
+    "domain": "reasoning",
+    "prompt": "A bat and a ball cost $1.10 total. The bat costs $1.00 more than the ball. How much does the ball cost? Show your reasoning.",
+    "rubric": "Correct answer $0.05, shows the algebra, does not fall for the intuitive $0.10 trap.",
+    "max_score": 5
+  },
+  {
+    "id": "reason-02",
+    "domain": "reasoning",
+    "prompt": "If all Bloops are Razzies and all Razzies are Lazzies, are all Bloops definitely Lazzies? Explain.",
+    "rubric": "Correct yes via transitivity, clear logical explanation.",
+    "max_score": 5
+  },
+  {
+    "id": "reason-03",
+    "domain": "reasoning",
+    "prompt": "You have a 3-liter and a 5-liter jug. Measure exactly 4 liters. Give the steps.",
+    "rubric": "Correct sequence yielding exactly 4 liters, steps are valid and reproducible.",
+    "max_score": 5
+  },
+  {
+    "id": "reason-04",
+    "domain": "reasoning",
+    "prompt": "A train leaves at 60 mph, another leaves the same station 1 hour later at 90 mph same direction. When does the second catch the first? Show work.",
+    "rubric": "Correct answer (2 hours after the second departs / 180 miles), shows the relative-speed setup.",
+    "max_score": 5
+  },
+  {
+    "id": "reason-05",
+    "domain": "reasoning",
+    "prompt": "Sort these steps to make tea into the correct order: pour water, boil water, add teabag, drink. Explain ordering.",
+    "rubric": "Correct order (boil, pour, add teabag, drink) with brief justification.",
+    "max_score": 5
+  }
+]

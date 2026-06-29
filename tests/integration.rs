@@ -1,14 +1,6 @@
 // Integration tests — require gateway running on :9000 and llama-server on :8081
 // Run: cargo test --test integration -- --ignored (needs live services)
-// Unit tests are inline in each module (router, context, etc.)
-
-#[cfg(test)]
-mod unit {
-    use ornith_gateway_lib::*;
-
-    // Router unit tests are in src/router.rs
-    // Context unit tests are in src/context.rs
-}
+// Unit tests are inline in each module (router, context, etc.) — run via: cargo test
 
 // Live E2E tests (require services up)
 #[cfg(test)]

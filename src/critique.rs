@@ -7,7 +7,8 @@ use crate::brain::{self, BrainResponse};
 use crate::config::Config;
 use crate::security::Constitutions;
 
-const CRITIQUE_TIMEOUT_SECS: u64 = 5;
+const CRITIQUE_TIMEOUT_SECS: u64 = 10;
+const FIX_TIMEOUT_SECS: u64 = 30;
 
 pub async fn maybe_critique(
     client: &Client,
@@ -80,7 +81,7 @@ pub async fn maybe_critique(
     ];
 
     let fix_result = timeout(
-        Duration::from_secs(CRITIQUE_TIMEOUT_SECS * 6),
+        Duration::from_secs(FIX_TIMEOUT_SECS),
         brain::infer(client, config, fix_messages, temperature, 2048, false, json!({})),
     )
     .await;

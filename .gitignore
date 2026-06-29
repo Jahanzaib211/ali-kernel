@@ -1,5 +1,11 @@
 /target/
 .env
-logs/*.jsonl
+.env.local
 /tmp/
-*.lock
+
+# Runtime + generated data (not source)
+logs/
+training/
+evals/eval_scores.jsonl
+ornith-generated/
+.claude/

@@ -10,6 +10,9 @@ pub struct Config {
     pub system_prompt: String,
     pub ram_moat: PathBuf,
     pub log_dir: PathBuf,
+    pub training_dir: PathBuf,
+    pub evals_dir: PathBuf,
+    pub qdrant_url: Option<String>,
 }
 
 impl Config {
@@ -38,6 +41,13 @@ impl Config {
         let log_dir = PathBuf::from(
             std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".into())
         );
+        let training_dir = PathBuf::from(
+            std::env::var("TRAINING_DIR").unwrap_or_else(|_| "training".into())
+        );
+        let evals_dir = PathBuf::from(
+            std::env::var("EVALS_DIR").unwrap_or_else(|_| "evals".into())
+        );
+        let qdrant_url = std::env::var("QDRANT_URL").ok().filter(|s| !s.is_empty());
 
         if !llama_bin.exists() {
             anyhow::bail!("LLAMA_BIN not found: {}", llama_bin.display());
@@ -54,11 +64,18 @@ impl Config {
             system_prompt,
             ram_moat,
             log_dir,
+            training_dir,
+            evals_dir,
+            qdrant_url,
         })
     }
 
     pub fn llama_base_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.llama_port)
+    }
+
+    pub fn model_info(&self) -> (&std::path::Path, &std::path::Path) {
+        (&self.llama_bin, &self.model_path)
     }
 
     pub async fn check_llama_health(&self) -> Result<()> {
