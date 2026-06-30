@@ -1,0 +1,68 @@
+# Ornith Sovereign Gateway — Roadmap & Crate Arsenal
+
+_Last updated: 2026-06-30._ Companion to `STATUS.md` (live status) and the engineering plan.
+
+## Vision
+
+A single-binary, local-only Rust kernel that wraps **Ornith-1.0-9B** and serves it to any agent
+framework over an OpenAI-compatible API — with cryptographic self-attestation, RAG memory, sandboxed
++ crate-aware tools, self-critique, and a self-improving training loop. **Sovereign**: no cloud,
+deterministic, the model helps build and improve itself. Lean on the local model; spend paid API tokens
+sparingly.
+
+---
+
+## Status
+
+| Phase | What | State |
+|---|---|---|
+| **0** | Stand up + dogfood + version control | ✅ done |
+| **0.5** | Behavioral shield (set-and-forget) | ✅ done — eval discriminates at **94%** |
+| 1 | Sovereign invariants (per-request attestation, 127.0.0.1, determinism) | next options |
+| 2 | Telemetry spine (broadcast + SSE) | planned |
+| 3 | Memory integrity + single-binary vector (Merkle vault, kill Qdrant) | planned |
+| 4 | Runtime resilience (guardian + human gate) | planned |
+| 5 | Harness layer (handshake/JWT + meta-learner + MCP) | planned |
+| 6 | Autonomy (self-engineer + reflection loop) | planned |
+| 7 | Command Centre (React + rust-embed) | planned |
+| 8 | Reproducible deploy (Nix flake) | planned |
+
+**Recommended next:** close the **training loop** — capture (now clean SFT + real DPO) → `clean_corpus.py`
+→ first LoRA fine-tune (unsloth) → swap GGUF → re-eval to move the 94%. This is the payoff of the shield.
+
+---
+
+## Crate Arsenal (curated — not the kitchen sink)
+
+A 200-crate "enterprise mesh" was proposed. Engineering reality: **each dependency is build time + attack
+surface**, and our own rules say *minimize deps, run `cargo audit`, stay sovereign*. So this is the curated
+~20 that actually serve the vision. AI/LLM crates are called out first.
+
+### AI / ML / LLM
+| Concern | Use now | Why / where |
+|---|---|---|
+| Inference | **llama.cpp via HTTP** (current) | keep the sidecar — gives watchdog, restart, circuit-breaker. (FFI `llama-cpp-2`/`candle` embedding rejected: ~30% slower, kills the watchdog.) |
+| Local embeddings | **`candle-core` + `candle-transformers`** | in-process embeddings (<2ms) for RAG → replaces the `/v1/embeddings` round-trip (Phase 3, L4) |
+| Tokenization | **`tokenizers`** (HF) | exact token budget in `context.rs` instead of the 4-chars/token estimate (L5) |
+| Vector search | **`sqlite-vec`** (via `rusqlite`) or **`hnsw_rs`** | single-binary ANN → **kills the Qdrant sidecar** (Phase 3) |
+| Fine-tuning | **unsloth / axolotl** (offline, Python) | LoRA on our `sft.jsonl` + `dpo_pairs.jsonl`; swap GGUF, re-eval |
+| _Consider later_ | `burn` (in-Rust training), `ort`/`tract` (ONNX small models) | only if we ever train/serve in-process |
+| _Skip_ | `mistral-rs`, `wonnx`, `ratchet`, `faiss-rs`, `milvus-sdk`, `qdrant-client`, `surrealdb` | redundant with llama.cpp + sqlite-vec; sovereignty/bloat |
+
+### Infrastructure (per phase)
+| Concern | Crate | Phase |
+|---|---|---|
+| Web/runtime | `axum`, `tokio`, `tower-http` (have) | core |
+| Integrity / Merkle | `sha2` (have), `rs_merkle` | 3 (vault) |
+| Auth handshake | `jsonwebtoken`, `hmac` | 5 |
+| Resilience | `governor` (rate-limit), `backon` (retry → replace hand-rolled), `sysinfo` (CPU), `nvml-wrapper` (VRAM) | 4 |
+| Telemetry/SSE | `tokio::sync::broadcast` + axum SSE (built-in) | 2 |
+| Checkpoints | `rkyv` or `bincode` (fast flight-recorder snapshots) | 6 |
+| UI embed | `rust-embed` | 7 |
+| Hygiene | `cargo audit`, `cargo deny` (CI) | cross-cutting |
+| _Skip_ | `kube`, `etcd`, `consul`, `aws-sdk-*`, `libp2p`, `quinn`, `tonic` | a single-owner local gateway needs none of these |
+
+**Principle:** add a crate when the need is real (DRY/YAGNI), audit it, prefer pure-Rust + sovereign.
+The crate-aware `crate_search`/`docs_lookup` tools (shipped in Phase 0.5) let **Ornith itself** justify
+each pick from crates.io/docs.rs — and that usage becomes the fine-tune signal toward "a Rust engineer
+who masters crates."
