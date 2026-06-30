@@ -166,9 +166,11 @@ async fn chat_handler(
     let final_temp = temperature.unwrap_or(routing.temperature);
     let route_name = format!("{:?}", routing.strategy).to_lowercase();
     let user_prompt = last_user_msg.to_string();
+    tracing::info!("PIPE L3 route={route_name} temp={final_temp:.1}");
 
     // L4: Episodic memory retrieval
     let memories = memory::retrieve(&user_prompt, &state.config).await;
+    tracing::info!("PIPE L4 memories={}", memories.len());
 
     // L5: Context assembly
     let assembled = context::assemble(
@@ -178,6 +180,7 @@ async fn chat_handler(
         &messages,
     );
     let assembled_for_loop = assembled.clone();
+    tracing::info!("PIPE L5 messages={}", assembled.len());
 
     // Build extra fields (tools, tool_choice, etc.)
     let mut extra = json!({});
@@ -283,6 +286,20 @@ async fn chat_handler(
 
             // L9: Logging
             let latency_ms = start.elapsed().as_millis() as u64;
+            tracing::info!("PIPE L8 critique={critique_applied} normalized={toolcall_normalized} think_stripped={think_stripped}");
+            tracing::info!(
+                "PIPE L9 latency_ms={latency_ms} tokens_in={} tokens_out={}",
+                response
+                    .get("usage")
+                    .and_then(|u| u.get("prompt_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                response
+                    .get("usage")
+                    .and_then(|u| u.get("completion_tokens"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
+            );
             let log_entry = logging::make_entry(
                 &request_id,
                 &route_name,
