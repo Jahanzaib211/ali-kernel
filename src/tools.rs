@@ -121,7 +121,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
 
         let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
 
-        let result = dispatch_tool(name, &args, config).await;
+        let result = dispatch_single_tool(name, &args, config).await;
         let raw = match result {
             Ok(output) => output,
             Err(e) => format!("Tool error: {e}"),
@@ -154,7 +154,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
     enriched
 }
 
-async fn dispatch_tool(name: &str, args: &Value, config: &Config) -> Result<String> {
+pub async fn dispatch_single_tool(name: &str, args: &Value, config: &Config) -> Result<String> {
     match name {
         "bash_exec" | "execute_bash" | "run_command" => {
             let cmd = args

@@ -27,6 +27,8 @@ pub struct Config {
     /// Confined workspace for the iterative dev-loop tools (cargo new/build/test).
     pub workspace_dir: PathBuf,
     pub dev_loop_enabled: bool,
+    /// Enable human gate — pause before tool execution and require approval.
+    pub human_gate_enabled: bool,
 }
 
 impl Config {
@@ -92,6 +94,10 @@ impl Config {
             .map(|v| v != "0")
             .unwrap_or(true);
 
+        let human_gate_enabled = std::env::var("ALI_HUMAN_GATE")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+
         // Bundled-binary/model checks only matter when we serve the local backend.
         if local_backend {
             if !llama_bin.exists() {
@@ -119,6 +125,7 @@ impl Config {
             local_backend,
             workspace_dir,
             dev_loop_enabled,
+            human_gate_enabled,
         })
     }
 

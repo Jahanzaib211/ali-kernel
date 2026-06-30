@@ -22,6 +22,7 @@ mod context;
 mod critique;
 mod devloop;
 mod evals;
+mod human_gate;
 mod logging;
 mod memory;
 mod router;
@@ -39,6 +40,7 @@ struct AppState {
     config: Arc<Config>,
     constitutions: Arc<Constitutions>,
     client: Arc<Client>,
+    human_gate: human_gate::HumanGate,
 }
 
 #[tokio::main]
@@ -77,12 +79,15 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(config.clone()),
         constitutions: Arc::new(constitutions),
         client: Arc::new(client),
+        human_gate: human_gate::HumanGate::new(),
     };
 
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_handler))
+        .route("/v1/approvals", post(approval_handler))
+        .route("/v1/approvals/:request_id", get(approval_status_handler))
         .route("/benchmark", get(benchmark_handler))
         .route("/eval", get(eval_handler))
         .route("/feedback", post(feedback_handler))
@@ -153,6 +158,11 @@ async fn chat_handler(
         .get("stream")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+
+    let human_gate = body
+        .get("human_gate")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(state.config.human_gate_enabled);
 
     // L3: Semantic routing
     let last_user_msg = messages
@@ -234,9 +244,16 @@ async fn chat_handler(
         Ok(brain::BrainResponse::Complete(response)) => {
             // L7: Agentic tool loop — execute tools, feed results back, repeat.
             // Shield: tool-call XML is normalized into structured tool_calls inside the loop.
-            let (response, tool_called, toolcall_normalized) =
-                run_agentic_loop(&state, response, assembled_for_loop, final_temp, max_tokens)
-                    .await;
+            let (response, tool_called, toolcall_normalized) = run_agentic_loop(
+                &state,
+                response,
+                assembled_for_loop,
+                final_temp,
+                max_tokens,
+                human_gate,
+                request_id.clone(),
+            )
+            .await;
 
             // Capture pre-critique content (think-stripped) so a rewrite becomes a clean DPO pair
             let original_content =
@@ -327,12 +344,16 @@ async fn chat_handler(
 
 /// L7 agentic loop: while the model emits tool_calls, execute them, append
 /// results as `role:"tool"` messages, and re-infer. Bounded by MAX_TOOL_ROUNDS.
+/// If human_gate is true, pauses before executing each tool and waits for approval
+/// via the /v1/approvals endpoint.
 async fn run_agentic_loop(
     state: &AppState,
     first_response: Value,
     mut conversation: Vec<Value>,
     temperature: f64,
     max_tokens: u64,
+    human_gate: bool,
+    request_id: String,
 ) -> (Value, bool, bool) {
     let mut response = first_response;
     let mut tool_called = false;
@@ -364,6 +385,104 @@ async fn run_agentic_loop(
             .and_then(|c| c.get("message"))
         {
             conversation.push(msg.clone());
+        }
+
+        // Extract tool calls for human gate if enabled
+        if human_gate {
+            let pending_tools = human_gate::extract_tool_calls(&response);
+            if !pending_tools.is_empty() {
+                // Register pending approval
+                state.human_gate.register(request_id.clone(), pending_tools.clone()).await;
+
+                // Log the pending event
+                for tool in &pending_tools {
+                    tracing::info!(
+                        "PIPE L7 human_gate_pending tool={} risk={} request_id={}",
+                        tool.tool_name,
+                        tool.risk,
+                        request_id
+                    );
+                }
+
+                // Wait for approval (polling with timeout)
+                let timeout_secs = 300u64; // 5 minute approval window
+                let start = std::time::Instant::now();
+                loop {
+                    if start.elapsed().as_secs() > timeout_secs {
+                        tracing::warn!("Human gate timeout for request_id={}", request_id);
+                        state.human_gate.remove(&request_id).await;
+                        return (response, tool_called, normalized);
+                    }
+                    if state.human_gate.is_resolved(&request_id).await {
+                        break;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+
+                // Build tool results based on approval decisions
+                let mut results: Vec<Value> = Vec::new();
+                for (i, tool) in pending_tools.iter().enumerate() {
+                    let approval = state.human_gate.approve(&request_id, i, None).await;
+                    match approval {
+                        Some(human_gate::ApprovalResult::Approved { modified_args }) => {
+                            // Execute the approved tool with original or modified args
+                            let args = modified_args.unwrap_or_else(|| tool.args.clone());
+                            let result = tools::dispatch_single_tool(
+                                &tool.tool_name,
+                                &args,
+                                &state.config,
+                            )
+                            .await;
+                            let raw = match result {
+                                Ok(output) => output,
+                                Err(e) => format!("Tool error: {e}"),
+                            };
+                            let compressed =
+                                crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
+                            results.push(json!({
+                                "tool_call_id": format!("call_{}", i),
+                                "role": "tool",
+                                "name": tool.tool_name,
+                                "content": compressed
+                            }));
+                            tracing::info!("PIPE L7 human_gate_approved tool={} request_id={}", tool.tool_name, request_id);
+                        }
+                        Some(human_gate::ApprovalResult::Denied) | None => {
+                            // Return denial as tool error result
+                            results.push(json!({
+                                "tool_call_id": format!("call_{}", i),
+                                "role": "tool",
+                                "name": tool.tool_name,
+                                "content": format!("Tool `{}` execution denied by user.", tool.tool_name)
+                            }));
+                            tracing::info!("PIPE L7 human_gate_denied tool={} request_id={}", tool.tool_name, request_id);
+                        }
+                    }
+                }
+
+                // Inject tool results and clean up
+                state.human_gate.remove(&request_id).await;
+                for r in results {
+                    conversation.push(r);
+                }
+
+                // Re-infer with tool outputs in context
+                match brain::infer(
+                    &state.client,
+                    &state.config,
+                    conversation.clone(),
+                    temperature,
+                    max_tokens,
+                    false,
+                    serde_json::json!({}),
+                )
+                .await
+                {
+                    Ok(brain::BrainResponse::Complete(next)) => response = next,
+                    _ => return (response, tool_called, normalized),
+                }
+                continue;
+            }
         }
 
         // Execute tools — execute_tools attaches "_tool_results"
@@ -399,6 +518,96 @@ async fn run_agentic_loop(
     }
 
     (response, tool_called, normalized)
+}
+
+async fn approval_handler(
+    State(state): State<AppState>,
+    Json(body): Json<Value>,
+) -> Response {
+    let request_id = match body.get("request_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "request_id required"})))
+                .into_response();
+        }
+    };
+
+    let action = match body.get("action").and_then(|v| v.as_str()) {
+        Some(a) => a,
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": "action required"})))
+                .into_response();
+        }
+    };
+
+    let tool_index = body
+        .get("tool_index")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    match action {
+        "approve" => {
+            let modified_args = body.get("modification").cloned();
+            if let Some(idx) = tool_index {
+                match state.human_gate.approve(&request_id, idx, modified_args).await {
+                    Some(_) => {
+                        tracing::info!("HG approve: request_id={} tool_index={}", request_id, idx);
+                        Json(json!({"status": "ok", "request_id": request_id, "executed": true, "denied": false}))
+                            .into_response()
+                    }
+                    None => {
+                        (StatusCode::NOT_FOUND, Json(json!({"error": "pending approval not found"})))
+                            .into_response()
+                    }
+                }
+            } else {
+                (StatusCode::BAD_REQUEST, Json(json!({"error": "tool_index required for approve"})))
+                    .into_response()
+            }
+        }
+        "deny" => {
+            if let Some(idx) = tool_index {
+                match state.human_gate.deny(&request_id, idx).await {
+                    Some(_) => {
+                        tracing::info!("HG deny: request_id={} tool_index={}", request_id, idx);
+                        Json(json!({"status": "ok", "request_id": request_id, "executed": false, "denied": true}))
+                            .into_response()
+                    }
+                    None => {
+                        (StatusCode::NOT_FOUND, Json(json!({"error": "pending approval not found"})))
+                            .into_response()
+                    }
+                }
+            } else {
+                (StatusCode::BAD_REQUEST, Json(json!({"error": "tool_index required for deny"})))
+                    .into_response()
+            }
+        }
+        _ => {
+            (StatusCode::BAD_REQUEST, Json(json!({"error": "action must be 'approve' or 'deny'"})))
+                .into_response()
+        }
+    }
+}
+
+async fn approval_status_handler(
+    State(state): State<AppState>,
+    axum::extract::Path(request_id): axum::extract::Path<String>,
+) -> Response {
+    match state.human_gate.get_pending(&request_id).await {
+        Some(tools) => Json(json!({
+            "request_id": request_id,
+            "pending": true,
+            "tools": tools,
+        }))
+        .into_response(),
+        None => Json(json!({
+            "request_id": request_id,
+            "pending": false,
+            "tools": [],
+        }))
+        .into_response(),
+    }
 }
 
 async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
