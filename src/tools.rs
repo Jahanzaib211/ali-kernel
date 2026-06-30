@@ -143,7 +143,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
     enriched
 }
 
-async fn dispatch_tool(name: &str, args: &Value, _config: &Config) -> Result<String> {
+async fn dispatch_tool(name: &str, args: &Value, config: &Config) -> Result<String> {
     match name {
         "bash_exec" | "execute_bash" | "run_command" => {
             let cmd = args
@@ -183,6 +183,36 @@ async fn dispatch_tool(name: &str, args: &Value, _config: &Config) -> Result<Str
                 .ok_or_else(|| anyhow::anyhow!("missing crate name"))?;
             crate_info(name).await
         }
+        // Iterative dev loop: scaffold, edit, add crates, build/test/lint.
+        "cargo_new" => {
+            dev_guard(config)?;
+            crate::devloop::cargo_new(&config.workspace_dir, str_arg(args, "project")?).await
+        }
+        "write_project_file" => {
+            dev_guard(config)?;
+            let path = arg_path(args).ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            crate::devloop::write_project_file(
+                &config.workspace_dir,
+                str_arg(args, "project")?,
+                path,
+                str_arg(args, "content")?,
+            )
+            .await
+        }
+        "cargo_add" => {
+            dev_guard(config)?;
+            let krate = args
+                .get("crate")
+                .or_else(|| args.get("name"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing crate"))?;
+            crate::devloop::cargo_add(&config.workspace_dir, str_arg(args, "project")?, krate).await
+        }
+        "cargo_check" | "cargo_build" | "cargo_test" | "cargo_clippy" => {
+            dev_guard(config)?;
+            let sub = name.trim_start_matches("cargo_");
+            crate::devloop::cargo_run(&config.workspace_dir, str_arg(args, "project")?, sub).await
+        }
         "get_weather" | "search" | "web_search" => {
             // Stub for external tools — return informative placeholder
             Ok(format!(
@@ -199,6 +229,19 @@ fn arg_path(args: &Value) -> Option<&str> {
         .or_else(|| args.get("filepath"))
         .or_else(|| args.get("file"))
         .and_then(|v| v.as_str())
+}
+
+fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing {key}"))
+}
+
+fn dev_guard(config: &Config) -> Result<()> {
+    if !config.dev_loop_enabled {
+        anyhow::bail!("dev-loop tools disabled (ORNITH_DEV_LOOP=0)");
+    }
+    Ok(())
 }
 
 fn network_tools_enabled() -> bool {

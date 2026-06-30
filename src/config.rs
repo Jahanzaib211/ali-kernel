@@ -24,6 +24,9 @@ pub struct Config {
     pub backend_model: String,
     /// True when serving the bundled local llama.cpp (enables binary/model checks).
     pub local_backend: bool,
+    /// Confined workspace for the iterative dev-loop tools (cargo new/build/test).
+    pub workspace_dir: PathBuf,
+    pub dev_loop_enabled: bool,
 }
 
 impl Config {
@@ -63,6 +66,13 @@ impl Config {
             .filter(|s| !s.is_empty());
         let backend_model = std::env::var("BACKEND_MODEL").unwrap_or_else(|_| "ornith".into());
 
+        let workspace_dir = PathBuf::from(
+            std::env::var("ORNITH_WORKSPACE").unwrap_or_else(|_| "/tmp/ornith-workspace".into()),
+        );
+        let dev_loop_enabled = std::env::var("ORNITH_DEV_LOOP")
+            .map(|v| v != "0")
+            .unwrap_or(true);
+
         // Bundled-binary/model checks only matter when we serve the local backend.
         if local_backend {
             if !llama_bin.exists() {
@@ -88,6 +98,8 @@ impl Config {
             backend_api_key,
             backend_model,
             local_backend,
+            workspace_dir,
+            dev_loop_enabled,
         })
     }
 

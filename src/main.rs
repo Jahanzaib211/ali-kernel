@@ -19,6 +19,7 @@ mod brain;
 mod config;
 mod context;
 mod critique;
+mod devloop;
 mod evals;
 mod logging;
 mod memory;
