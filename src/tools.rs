@@ -122,10 +122,21 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
         let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
 
         let result = dispatch_tool(name, &args, config).await;
-        let content = match result {
+        let raw = match result {
             Ok(output) => output,
             Err(e) => format!("Tool error: {e}"),
         };
+
+        // L5.5: structurally compress the observation before it re-enters context.
+        let content =
+            crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
+        if content.len() < raw.len() {
+            tracing::info!(
+                "L5.5 compressed {name} output: {} → {} chars",
+                raw.len(),
+                content.len()
+            );
+        }
 
         results.push(json!({
             "tool_call_id": id,

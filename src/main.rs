@@ -16,6 +16,7 @@ use tracing::info;
 use uuid::Uuid;
 
 mod brain;
+mod compress;
 mod config;
 mod context;
 mod critique;
