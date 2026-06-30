@@ -45,7 +45,10 @@ pub fn normalize_tool_calls(response: &mut Value) -> bool {
     }
 
     // Strip the XML blocks out of content; null it if nothing else remains.
-    let cleaned = tool_call_re().replace_all(&content, "").trim().to_string();
+    let cleaned = function_block_re()
+        .replace_all(&tool_call_re().replace_all(&content, ""), "")
+        .trim()
+        .to_string();
     message["content"] = if cleaned.is_empty() {
         Value::Null
     } else {
@@ -58,6 +61,11 @@ pub fn normalize_tool_calls(response: &mut Value) -> bool {
 fn tool_call_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?s)<tool_call>.*?</tool_call>").unwrap())
+}
+
+fn function_block_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)<function=[^>]+>.*?</function>").unwrap())
 }
 
 /// Parse `<function=NAME><parameter=KEY>VALUE</parameter>...</function>` blocks
