@@ -97,3 +97,51 @@ pub fn extract_content(response: &Value) -> Option<&str> {
         .get("content")?
         .as_str()
 }
+
+/// Shield: strip any `<think>…</think>` reasoning blocks (and a dangling unclosed
+/// `<think>`) that leak into visible content. Returns `(cleaned, changed)`.
+pub fn strip_think(content: &str) -> (String, bool) {
+    if !content.contains("<think>") {
+        return (content.to_string(), false);
+    }
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find("<think>") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("</think>") {
+            Some(end) => rest = &rest[start + end + "</think>".len()..],
+            None => {
+                rest = ""; // unclosed think → drop the remainder
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    let cleaned = out.trim().to_string();
+    (cleaned, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_think;
+
+    #[test]
+    fn strips_think_block() {
+        let (c, changed) = strip_think("<think>reasoning here</think>\nfinal answer");
+        assert!(changed);
+        assert_eq!(c, "final answer");
+    }
+
+    #[test]
+    fn strips_unclosed_think() {
+        let (c, _) = strip_think("ok<think>still thinking and cut off");
+        assert_eq!(c, "ok");
+    }
+
+    #[test]
+    fn leaves_clean_content() {
+        let (c, changed) = strip_think("just an answer");
+        assert!(!changed);
+        assert_eq!(c, "just an answer");
+    }
+}

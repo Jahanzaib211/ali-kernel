@@ -16,6 +16,9 @@ pub struct PipelineLog {
     pub route: String,
     pub tool_called: bool,
     pub critique_applied: bool,
+    // Behavioral-shield counters — how often each correction fired.
+    pub think_stripped: bool,
+    pub toolcall_normalized: bool,
 }
 
 pub fn init_log_dir(log_dir: &Path) -> Result<()> {
@@ -36,6 +39,7 @@ pub fn log_request(log_dir: &Path, entry: PipelineLog) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn make_entry(
     request_id: &str,
     route: &str,
@@ -43,6 +47,8 @@ pub fn make_entry(
     latency_ms: u64,
     tool_called: bool,
     critique_applied: bool,
+    think_stripped: bool,
+    toolcall_normalized: bool,
 ) -> PipelineLog {
     let usage = response.get("usage");
     let prompt_tokens = usage
@@ -64,5 +70,7 @@ pub fn make_entry(
         route: route.to_string(),
         tool_called,
         critique_applied,
+        think_stripped,
+        toolcall_normalized,
     }
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 /// Append one SFT (supervised fine-tuning) example in alpaca format.
 /// File: {training_dir}/sft.jsonl — consumed directly by unsloth/axolotl.
 pub fn log_sft(training_dir: &Path, instruction: &str, output: &str, route: &str) -> Result<()> {
-    if output.trim().is_empty() {
+    if output.trim().is_empty() || !is_clean_example(instruction, output) {
         return Ok(());
     }
     let entry = json!({
@@ -19,6 +19,22 @@ pub fn log_sft(training_dir: &Path, instruction: &str, output: &str, route: &str
         "ts": Utc::now().to_rfc3339(),
     });
     append_line(&training_dir.join("sft.jsonl"), &entry.to_string())
+}
+
+/// Corpus hygiene: reject malformed tool-call XML answers and self-instruct
+/// meta-prompts so they never enter the training set.
+fn is_clean_example(instruction: &str, output: &str) -> bool {
+    if output.contains("<tool_call>") || output.contains("<function=") {
+        return false;
+    }
+    let lo = instruction.to_lowercase();
+    if lo.contains("one per line")
+        || lo.contains("one item per line")
+        || lo.contains("no numbering")
+    {
+        return false; // self-instruct meta-prompt
+    }
+    true
 }
 
 /// Append one DPO preference pair.

@@ -224,16 +224,18 @@ async fn chat_handler(
         }
 
         Ok(brain::BrainResponse::Complete(response)) => {
-            // L7: Agentic tool loop — execute tools, feed results back, repeat
-            let (response, tool_called) =
+            // L7: Agentic tool loop — execute tools, feed results back, repeat.
+            // Shield: tool-call XML is normalized into structured tool_calls inside the loop.
+            let (response, tool_called, toolcall_normalized) =
                 run_agentic_loop(&state, response, assembled_for_loop, final_temp, max_tokens)
                     .await;
 
-            // Capture pre-critique content so a rewrite becomes a DPO pair
-            let original_content = brain::extract_content(&response).unwrap_or("").to_string();
+            // Capture pre-critique content (think-stripped) so a rewrite becomes a clean DPO pair
+            let original_content =
+                brain::strip_think(brain::extract_content(&response).unwrap_or("")).0;
 
-            // L8: Critique loop
-            let (response, critique_applied) = critique::maybe_critique(
+            // L8: Critique loop (strict-but-honest)
+            let (mut response, critique_applied) = critique::maybe_critique(
                 &state.client,
                 &state.config,
                 &state.constitutions,
@@ -242,7 +244,14 @@ async fn chat_handler(
             )
             .await;
 
-            let final_content = brain::extract_content(&response).unwrap_or("").to_string();
+            // Shield: strip any leaked <think> from the harness-facing output and write it back.
+            let (final_content, think_stripped) =
+                brain::strip_think(brain::extract_content(&response).unwrap_or(""));
+            if think_stripped {
+                if let Some(msg) = response.pointer_mut("/choices/0/message") {
+                    msg["content"] = Value::String(final_content.clone());
+                }
+            }
 
             // RLAIF data capture (Step 2): SFT always, DPO when critique rewrote
             if let Err(e) = training::log_sft(
@@ -276,6 +285,8 @@ async fn chat_handler(
                 latency_ms,
                 tool_called,
                 critique_applied,
+                think_stripped,
+                toolcall_normalized,
             );
             if let Err(e) = logging::log_request(&state.config.log_dir, log_entry) {
                 tracing::warn!("Log write failed: {e}");
@@ -300,11 +311,16 @@ async fn run_agentic_loop(
     mut conversation: Vec<Value>,
     temperature: f64,
     max_tokens: u64,
-) -> (Value, bool) {
+) -> (Value, bool, bool) {
     let mut response = first_response;
     let mut tool_called = false;
+    let mut normalized = false;
 
     for _ in 0..MAX_TOOL_ROUNDS {
+        // Shield: rewrite any XML-style tool call into structured tool_calls first.
+        if tools::normalize_tool_calls(&mut response) {
+            normalized = true;
+        }
         let has_tool_calls = response
             .get("choices")
             .and_then(|c| c.get(0))
@@ -337,7 +353,7 @@ async fn run_agentic_loop(
             .unwrap_or_default();
 
         if results.is_empty() {
-            return (enriched, tool_called);
+            return (enriched, tool_called, normalized);
         }
         for r in results {
             conversation.push(r);
@@ -360,7 +376,7 @@ async fn run_agentic_loop(
         }
     }
 
-    (response, tool_called)
+    (response, tool_called, normalized)
 }
 
 async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {

@@ -129,7 +129,9 @@ async fn generate_answer(
 /// RLAIF self-grading: the model scores the answer against the rubric, 0..max_score.
 async fn judge(client: &Client, config: &Config, task: &EvalTask, answer: &str) -> u32 {
     let prompt = format!(
-        "You are a strict grader. Score the ANSWER against the RUBRIC from 0 to {max}.\n\n\
+        "You are a harsh, exacting grader. Score the ANSWER against the RUBRIC from 0 to {max}.\n\
+         Deduct a point for ANY flaw, missing edge case, unhandled error, or deviation from the rubric. \
+         A flawless full-mark answer is rare — most answers have at least one fault. Do not be generous.\n\n\
          TASK: {task_prompt}\n\nRUBRIC: {rubric}\n\nANSWER:\n{answer}\n\n\
          Respond with ONLY a single integer from 0 to {max}. No words.",
         max = task.max_score,
