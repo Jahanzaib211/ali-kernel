@@ -66,3 +66,23 @@ surface**, and our own rules say *minimize deps, run `cargo audit`, stay soverei
 The crate-aware `crate_search`/`docs_lookup` tools (shipped in Phase 0.5) let **Ornith itself** justify
 each pick from crates.io/docs.rs — and that usage becomes the fine-tune signal toward "a Rust engineer
 who masters crates."
+
+---
+
+## Context Compression layer (mined from headroom)
+
+Ref: `github.com/headroomlabs-ai/headroom` — a context-compression layer that shrinks LLM input 60–95%.
+High value here because **Ornith's window is small (~12K)** and we obsess over tokens. Mine the concepts,
+implement lean in-gateway (sovereignty / single-binary), do **not** adopt the full stack.
+
+- **L5.5 Compression** (new stage, between `context::assemble` and `brain::infer`): squeeze tool outputs
+  (cargo errors, file reads, crate docs), retrieved memory, and long history before the small window.
+  Strategies: AST-light code squeeze + JSON key-pruning + smart truncation (headroom's CodeCompressor /
+  SmartCrusher, lean Rust impl).
+- **Cache alignment**: keep the system prefix byte-stable to maximize llama.cpp prompt-cache hits
+  (we already see `cached_tokens` from the constitution prefix — formalize it).
+- **Reversible (CCR)**: store full content in scratchpad/vault, inject compressed, expand on demand.
+- **Failure mining** (`headroom learn` analogue): miner over `pipeline.jsonl` + low `/eval` scores →
+  correction notes feeding the RLAIF/DPO loop.
+- _Optional later_: headroom's Rust core for the trained prose compressor; or run headroom as a Claude
+  Code wrapper to cut the orchestrator's own token spend (their tool supports Claude Code directly).
