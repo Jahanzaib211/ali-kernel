@@ -250,6 +250,13 @@ fn network_tools_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// Operator opt-in to run bash_exec without bwrap isolation (default: deny).
+fn unsandboxed_allowed() -> bool {
+    std::env::var("ORNITH_ALLOW_UNSANDBOXED")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
 /// Read-only query against the public crates.io registry. No data leaves beyond the query.
 async fn crates_io_search(query: &str) -> Result<String> {
     if !network_tools_enabled() {
@@ -329,6 +336,15 @@ async fn sandbox_exec(cmd: &str) -> Result<String> {
     let bwrap = std::path::Path::new("/usr/bin/bwrap").exists()
         || std::path::Path::new("/usr/local/bin/bwrap").exists();
 
+    // Fail closed: without bwrap isolation, refuse to execute unless the operator
+    // has explicitly accepted a less-isolated fallback via ORNITH_ALLOW_UNSANDBOXED=1.
+    if !bwrap && !unsandboxed_allowed() {
+        anyhow::bail!(
+            "refusing bash_exec: bubblewrap (bwrap) not found. Install bwrap, or set \
+             ORNITH_ALLOW_UNSANDBOXED=1 to accept a less-isolated fallback."
+        );
+    }
+
     let output = if bwrap {
         timeout(
             Duration::from_secs(TOOL_TIMEOUT_SECS),
@@ -368,7 +384,10 @@ async fn sandbox_exec(cmd: &str) -> Result<String> {
         )
         .await
     } else {
-        // Fallback: restricted bash with no network, time limit
+        tracing::warn!(
+            "bwrap missing — running bash_exec WITHOUT sandbox isolation (ORNITH_ALLOW_UNSANDBOXED=1)"
+        );
+        // Degraded fallback (opt-in only): restricted bash + time limit, NO fs/net isolation.
         timeout(
             Duration::from_secs(TOOL_TIMEOUT_SECS),
             tokio::task::spawn_blocking({
