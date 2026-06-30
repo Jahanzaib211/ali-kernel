@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ornith_gateway=info".parse().unwrap()),
+                .unwrap_or_else(|_| "ali_kernel=info".parse().unwrap()),
         )
         .init();
 
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", config.gateway_port);
-    info!("Ornith Sovereign Gateway listening on {addr}");
+    info!("Ali Kernel listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
@@ -117,7 +117,7 @@ async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
         "data": [{
             "id": state.config.backend_model,
             "object": "model",
-            "owned_by": "ornith-gateway",
+            "owned_by": "ali-kernel",
             "created": 1700000000
         }]
     }))

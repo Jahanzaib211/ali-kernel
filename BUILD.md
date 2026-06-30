@@ -1,6 +1,6 @@
 # How This Is Being Built — Parties, Roles & Method
 
-_A living record of who builds the Ornith Sovereign Gateway and how. Persistent by design._
+_A living record of who builds the Ali Kernel and how. Persistent by design._
 _Last updated: 2026-06-30._
 
 ---
@@ -12,7 +12,7 @@ _Last updated: 2026-06-30._
 | **Jahanzaib Ali ("Max")** | **Owner / Product Lead / Vision** | Direction, the north stars (absolute sovereignty, token economy, deterministic local kernel), and the **final call on consequential changes** (anything that reroutes auth, modifies startup config, or spends real money). Generates the big architectural ideas (gateway-as-compressor, distill-a-compressor, crate-mastery). |
 | **Claude (this agent)** | **Engineering Lead / Implementer** | Turns vision into shipped code: makes technical calls, writes/tests/reviews, surfaces trade-offs, **enforces discipline** (security findings closed before features; tests + clippy green on every commit). Orchestrates the local model; keeps its own (paid) token spend low. |
 | **Ornith-1.0-9B** (local model) | **The Engine / Apprentice → Co-builder** | The model the gateway serves. Does generation, self-critique, crate exploration, and now real dev-loop coding (write → build → test). Subject of the training loop; trending toward self-improvement. |
-| **The Gateway** (`ornith-gateway`) | **The Product / Kernel** | The artifact being built. Provides the capabilities; the model behind it is interchangeable. Endgame: the single compressing proxy in front of *every* model. |
+| **The Gateway** (`ali-kernel`) | **The Product / Kernel** | The artifact being built. Provides the capabilities; the model behind it is interchangeable. Endgame: the single compressing proxy in front of *every* model. |
 | **headroom** | **External Teacher / Reference** | Bootstraps the compression concepts (mined into native L5.5) and can wrap Claude Code to cut the orchestrator's tokens. **Not required at gateway runtime.** |
 
 ---
@@ -44,7 +44,7 @@ a **sovereign compressing proxy for any model — including the orchestrator its
                               │  OpenAI face  : /v1/chat/completions
   Any OpenAI provider ◄───────┤  (compress observations, route to backend)
                               │
-        ┌──────────────  ORNITH GATEWAY  ──────────────┐
+        ┌──────────────  ALI KERNEL  ──────────────┐
         │            shared engine: compress.rs         │
         └──────────────────────┬────────────────────────┘
                               │  Anthropic face : /v1/messages  (TO BUILD)

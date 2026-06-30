@@ -1,0 +1,17 @@
+[Unit]
+Description=Ali Kernel
+After=network.target
+
+[Service]
+Type=simple
+User=jahanzaib
+ExecStart=/home/jahanzaib/ali-kernel/target/release/ali-kernel
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/home/jahanzaib
+WorkingDirectory=/home/jahanzaib/ali-kernel
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

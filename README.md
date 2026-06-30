@@ -1,4 +1,4 @@
-# Ornith Sovereign Gateway
+# Ali Kernel
 
 > A single-binary Rust runtime that exposes an OpenAI-compatible API and **augments the model with access to the Rust ecosystem** — discovering libraries, reading documentation, executing sandboxed tools, and integrating dependencies — on top of binary attestation, constitution integrity, semantic routing, RAG memory, self-critique, and structured observability.
 
@@ -19,9 +19,9 @@ iterative develop → build → test loop — every capability benefits whicheve
 ```
 Client (any OpenAI SDK)
         │
-        ▼ :9000
+         ▼ :9000
 ┌───────────────────────────────────────────────────────────┐
-│                  Ornith Sovereign Gateway                  │
+│                       Ali Kernel                           │
 │                                                           │
 │  L0  Config & Environment       (.env validation)         │
 │  L1  Binary Attestation         (SHA-256 /proc/self/exe)  │
@@ -37,8 +37,14 @@ Client (any OpenAI SDK)
         │
         ▼ :8081
    llama-server (llama.cpp)
-   ornith-1.0-9B Q4_K_M
+    ornith-1.0-9B Q4_K_M
 ```
+
+---
+
+## Launcher
+
+Type `ali` in your terminal to launch the Ali Kernel TUI. See `ali.sh` for the launch script.
 
 ---
 
@@ -107,9 +113,9 @@ cp .env.example .env
 cargo build --release
 
 # Initialise integrity hashes (first run)
-mkdir -p /tmp/ornith-ram-moat
-sha256sum target/release/ornith-gateway | awk '{print $1}' > /tmp/ornith-ram-moat/golden_binary.hash
-sha256sum constitutions/SOUL.md | awk '{print $1}' > /tmp/ornith-ram-moat/soul_golden_hash.txt
+mkdir -p /tmp/ali-ram-moat
+sha256sum target/release/ali-kernel | awk '{print $1}' > /tmp/ali-ram-moat/golden_binary.hash
+sha256sum constitutions/SOUL.md | awk '{print $1}' > /tmp/ali-ram-moat/soul_golden_hash.txt
 ```
 
 ---
@@ -118,13 +124,13 @@ sha256sum constitutions/SOUL.md | awk '{print $1}' > /tmp/ornith-ram-moat/soul_g
 
 ```bash
 # Foreground
-./target/release/ornith-gateway
+./target/release/ali-kernel
 
 # systemd (production)
-sudo cp ~/ornith-gateway.service /etc/systemd/system/
+sudo cp ~/ali-kernel.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now ornith-gateway
-sudo journalctl -fu ornith-gateway
+sudo systemctl enable --now ali-kernel
+sudo journalctl -fu ali-kernel
 ```
 
 ---
@@ -149,7 +155,7 @@ All endpoints are OpenAI SDK-compatible.
 ```json
 {
   "object": "list",
-  "data": [{ "id": "ornith", "object": "model", "owned_by": "ornith-gateway" }]
+  "data": [{ "id": "ornith", "object": "model", "owned_by": "ali-kernel" }]
 }
 ```
 
@@ -308,17 +314,17 @@ All config via `.env` (see `.env.example`):
 
 ```ini
 [Unit]
-Description=Ornith Sovereign Gateway
+Description=Ali Kernel
 After=network.target
 
 [Service]
 Type=simple
 User=jahanzaib
-ExecStart=/home/jahanzaib/ornith-stack/target/release/ornith-gateway
+ExecStart=/home/jahanzaib/ali-kernel/target/release/ali-kernel
 Restart=on-failure
 RestartSec=5
 Environment=HOME=/home/jahanzaib
-WorkingDirectory=/home/jahanzaib/ornith-stack
+WorkingDirectory=/home/jahanzaib/ali-kernel
 StandardOutput=journal
 StandardError=journal
 

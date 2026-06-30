@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────────
-BINARY="/home/jahanzaib/ornith-stack/target/release/ornith-gateway"
-SERVICE_FILE="/home/jahanzaib/ornith-gateway.service"
+BINARY="/home/jahanzaib/ali-kernel/target/release/ali-kernel"
+SERVICE_FILE="/home/jahanzaib/ali-kernel/ali-kernel.service"
 SYSTEMD_DIR="/etc/systemd/system"
 USER="jahanzaib"
-WORKING_DIR="/home/jahanzaib/ornith-stack"
+WORKING_DIR="/home/jahanzaib/ali-kernel"
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 green()  { printf "\033[0;32m%s\033[0m\n" "$*"; }
@@ -37,16 +37,16 @@ fi
 
 # ── Install ────────────────────────────────────────────────────────────────
 green "Copying service file to $SYSTEMD_DIR ..."
-sudo cp "$SERVICE_FILE" "$SYSTEMD_DIR/ornith-gateway.service"
+sudo cp "$SERVICE_FILE" "$SYSTEMD_DIR/ali-kernel.service"
 
 green "Reloading systemd daemon ..."
 sudo systemctl daemon-reload
 
 green "Enabling service ..."
-sudo systemctl enable --now ornith-gateway
+sudo systemctl enable --now ali-kernel
 
 # ── Status ─────────────────────────────────────────────────────────────────
 cyan "Service status:"
-sudo systemctl status ornith-gateway --no-pager
+sudo systemctl status ali-kernel --no-pager
 
-green "Ornith Sovereign Gateway service installed and started successfully."
+green "Ali Kernel service installed and started successfully."

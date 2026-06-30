@@ -43,7 +43,7 @@ pub fn attest_binary(config: &Config) -> Result<()> {
 
 pub fn verify_constitutions(config: &Config) -> Result<Constitutions> {
     let soul = fs::read_to_string("constitutions/SOUL.md")
-        .context("Cannot read constitutions/SOUL.md — run from ornith-stack/ directory")?;
+        .context("Cannot read constitutions/SOUL.md — run from ali-kernel/ directory")?;
     let agent = fs::read_to_string("constitutions/AGENT.md")
         .context("Cannot read constitutions/AGENT.md")?;
     let owner = fs::read_to_string("constitutions/OWNER.md")

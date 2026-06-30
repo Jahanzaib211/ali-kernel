@@ -35,20 +35,34 @@ impl Config {
 
         let llama_bin = PathBuf::from(std::env::var("LLAMA_BIN").context("LLAMA_BIN not set")?);
         let model_path = PathBuf::from(std::env::var("MODEL_PATH").context("MODEL_PATH not set")?);
-        let llama_port: u16 = std::env::var("LLAMA_PORT")
-            .unwrap_or_else(|_| "8081".into())
+        let llama_port: u16 = std::env::var("ALI_LLAMA_PORT")
+            .ok()
+            .or_else(|| std::env::var("LLAMA_PORT").ok())
+            .unwrap_or_else(|| "8081".into())
             .parse()
-            .context("LLAMA_PORT must be a valid port number")?;
-        let gateway_port: u16 = std::env::var("GATEWAY_PORT")
-            .unwrap_or_else(|_| "9000".into())
+            .context("ALI_LLAMA_PORT must be a valid port number")?;
+        let gateway_port: u16 = std::env::var("ALI_GATEWAY_PORT")
+            .ok()
+            .or_else(|| std::env::var("GATEWAY_PORT").ok())
+            .unwrap_or_else(|| "9000".into())
             .parse()
-            .context("GATEWAY_PORT must be a valid port number")?;
-        let system_prompt = std::env::var("SYSTEM_PROMPT")
-            .unwrap_or_else(|_| "You are a helpful AI assistant.".into());
+            .context("ALI_GATEWAY_PORT must be a valid port number")?;
+        let system_prompt = std::env::var("ALI_SYSTEM_PROMPT")
+            .ok()
+            .or_else(|| std::env::var("SYSTEM_PROMPT").ok())
+            .unwrap_or_else(|| "You are a helpful AI assistant.".into());
         let ram_moat = PathBuf::from(
-            std::env::var("RAM_MOAT").unwrap_or_else(|_| "/tmp/ornith-ram-moat".into()),
+            std::env::var("ALI_RAM_MOAT")
+                .ok()
+                .or_else(|| std::env::var("RAM_MOAT").ok())
+                .unwrap_or_else(|| "/tmp/ali-ram-moat".into()),
         );
-        let log_dir = PathBuf::from(std::env::var("LOG_DIR").unwrap_or_else(|_| "logs".into()));
+        let log_dir = PathBuf::from(
+            std::env::var("ALI_LOG_DIR")
+                .ok()
+                .or_else(|| std::env::var("LOG_DIR").ok())
+                .unwrap_or_else(|| "logs".into()),
+        );
         let training_dir =
             PathBuf::from(std::env::var("TRAINING_DIR").unwrap_or_else(|_| "training".into()));
         let evals_dir =
@@ -67,9 +81,14 @@ impl Config {
         let backend_model = std::env::var("BACKEND_MODEL").unwrap_or_else(|_| "ornith".into());
 
         let workspace_dir = PathBuf::from(
-            std::env::var("ORNITH_WORKSPACE").unwrap_or_else(|_| "/tmp/ornith-workspace".into()),
+            std::env::var("ALI_WORKSPACE")
+                .ok()
+                .or_else(|| std::env::var("ORNITH_WORKSPACE").ok())
+                .unwrap_or_else(|| "/tmp/ali-workspace".into()),
         );
-        let dev_loop_enabled = std::env::var("ORNITH_DEV_LOOP")
+        let dev_loop_enabled = std::env::var("ALI_DEV_LOOP")
+            .ok()
+            .or_else(|| std::env::var("ORNITH_DEV_LOOP").ok())
             .map(|v| v != "0")
             .unwrap_or(true);
 

@@ -1,4 +1,4 @@
-# Ornith Sovereign Gateway — Roadmap & Crate Arsenal
+# Ali Kernel — Roadmap & Crate Arsenal
 
 _Last updated: 2026-06-30._ Companion to `STATUS.md` (live status) and the engineering plan.
 
@@ -18,6 +18,7 @@ sparingly.
 |---|---|---|
 | **0** | Stand up + dogfood + version control | ✅ done |
 | **0.5** | Behavioral shield (set-and-forget) | ✅ done — eval discriminates at **94%** |
+| **0.75** | Ali TUI + human gate | ✅ done — elite approval UI with SSE streaming |
 | 1 | Sovereign invariants (per-request attestation, 127.0.0.1, determinism) | next options |
 | 2 | Telemetry spine (broadcast + SSE) | planned |
 | 3 | Memory integrity + single-binary vector (Merkle vault, kill Qdrant) | planned |

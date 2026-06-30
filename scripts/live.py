@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Live terminal view of the Ornith Sovereign Gateway — shows the REAL per-layer
+Live terminal view of the Ali Kernel — shows the REAL per-layer
 activity as it happens, by tailing the gateway's structured log during a request.
 
 It sends a tool-capable prompt so you see routing, memory, L5.5 compression
@@ -11,6 +11,7 @@ It sends a tool-capable prompt so you see routing, memory, L5.5 compression
 Real terminal → animated spinners + in-place updates. Piped → step-by-step lines.
 """
 import json
+import os
 import queue
 import re
 import sys
@@ -19,7 +20,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-GW = "http://127.0.0.1:9000"
+GW = os.environ.get("ALI_GATEWAY_URL", "http://127.0.0.1:9000")
 ROOT = Path(__file__).resolve().parent.parent
 LOG = ROOT / "logs" / "gateway.log"
 TTY = sys.stdout.isatty()
@@ -114,7 +115,7 @@ def chat(prompt, box):
 def header(h):
     caps = h.get("capabilities", [])
     tog = lambda on: col("● on", "32") if on else col("○ off", "2")  # noqa: E731
-    print(col("┏━ ORNITH SOVEREIGN GATEWAY ━ live pipeline ━━━━━━━━━━━━━┓", "36"))
+    print(col("┏━ ALI KERNEL ━ live pipeline ━━━━━━━━━━━━━━━━━━━━━━━━━━┓", "36"))
     print("  backend  " + col(h.get("backend", "?"), "32") + f"  · {h.get('model')}  @ {h.get('backend_url')}")
     print(f"  shield {tog('behavioral_shield' in caps)}  tools {tog('agentic_tools' in caps)}  "
           f"crate {tog('crate_aware_tools' in caps)}  compress {tog(True)}  rlaif {tog('rlaif_capture' in caps)}")
@@ -132,7 +133,7 @@ def line_for(i, states, details, frame):
 
 def main():
     prompt = " ".join(sys.argv[1:]) or \
-        "Read the file /home/jahanzaib/ornith-stack/Cargo.lock and tell me how many crates are listed."
+        "Read the file /home/jahanzaib/ali-kernel/Cargo.lock and tell me how many crates are listed."
     try:
         h = get(GW + "/health")
     except Exception as e:  # noqa: BLE001

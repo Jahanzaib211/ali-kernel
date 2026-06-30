@@ -1,4 +1,4 @@
-# Ornith Sovereign Gateway — Live Status
+# Ali Kernel — Live Status
 
 _Last updated: 2026-06-30 (session: stand-up + dogfood + RLAIF flywheel)_
 
