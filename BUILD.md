@@ -1,0 +1,61 @@
+# How This Is Being Built — Parties, Roles & Method
+
+_A living record of who builds the Ornith Sovereign Gateway and how. Persistent by design._
+_Last updated: 2026-06-30._
+
+---
+
+## The parties and their roles
+
+| Party | Role | What they own |
+|---|---|---|
+| **Jahanzaib Ali ("Max")** | **Owner / Product Lead / Vision** | Direction, the north stars (absolute sovereignty, token economy, deterministic local kernel), and the **final call on consequential changes** (anything that reroutes auth, modifies startup config, or spends real money). Generates the big architectural ideas (gateway-as-compressor, distill-a-compressor, crate-mastery). |
+| **Claude (this agent)** | **Engineering Lead / Implementer** | Turns vision into shipped code: makes technical calls, writes/tests/reviews, surfaces trade-offs, **enforces discipline** (security findings closed before features; tests + clippy green on every commit). Orchestrates the local model; keeps its own (paid) token spend low. |
+| **Ornith-1.0-9B** (local model) | **The Engine / Apprentice → Co-builder** | The model the gateway serves. Does generation, self-critique, crate exploration, and now real dev-loop coding (write → build → test). Subject of the training loop; trending toward self-improvement. |
+| **The Gateway** (`ornith-gateway`) | **The Product / Kernel** | The artifact being built. Provides the capabilities; the model behind it is interchangeable. Endgame: the single compressing proxy in front of *every* model. |
+| **headroom** | **External Teacher / Reference** | Bootstraps the compression concepts (mined into native L5.5) and can wrap Claude Code to cut the orchestrator's tokens. **Not required at gateway runtime.** |
+
+---
+
+## How we build (method)
+
+- **Plan → execute → verify → commit, in small increments.** Each capability lands as its own
+  reviewed, tested, pushed commit. Nothing half-wired.
+- **Discipline before features.** A known security finding on a powerful surface is closed before the
+  next feature (e.g. fail-closed sandbox + argv-injection fix shipped before the compression layer).
+- **Token economy (3 tiers).** Ornith (local, $0) does bulk work; Haiku-tier handles cheap orchestration;
+  Opus (Claude) is reserved for architecture, review, and high-signal teacher feedback.
+- **Dogfooding.** The gateway's own tools are used on its own build — e.g. `crate_search` picks the
+  crates for new features; the dev loop will eventually extend the gateway itself.
+- **Sovereignty + minimize-deps.** Prefer pure-Rust, single-binary, audited crates; mine concepts rather
+  than adopt heavy stacks (native L5.5 instead of running headroom at runtime).
+- **Persistence everywhere.** Plan file, `STATUS.md`, `ROADMAP.md`, `BUILD.md`, dated session files in
+  `~/.claude/session-data/`, and a file-based memory — so any session (human or agent) can resume cold.
+
+---
+
+## The unification: one gateway compresses everyone
+
+The gateway already has the two pieces (pluggable backend + native L5.5 compression). Joined, it becomes
+a **sovereign compressing proxy for any model — including the orchestrator itself.**
+
+```
+  Ornith (local)  ◄───────────┐
+                              │  OpenAI face  : /v1/chat/completions
+  Any OpenAI provider ◄───────┤  (compress observations, route to backend)
+                              │
+        ┌──────────────  ORNITH GATEWAY  ──────────────┐
+        │            shared engine: compress.rs         │
+        └──────────────────────┬────────────────────────┘
+                              │  Anthropic face : /v1/messages  (TO BUILD)
+  Claude Code  ───────────────┘  (compress request, forward to api.anthropic.com, stream back)
+```
+
+- **Today:** L5.5 compresses tool observations before they re-enter the local model (verified ~84%
+  reduction on a 51 KB file → fit in the ~12K window).
+- **Next (this idea):** add an **Anthropic-Messages proxy face** so Claude Code can route through the
+  gateway (`ANTHROPIC_BASE_URL=<gateway>`); the same `compress.rs` shrinks *Claude's* context too.
+  Result: **one gateway compresses Ornith and Claude simultaneously**, and headroom is no longer needed.
+
+This is the literal expression of the project thesis: *the gateway is the product; every model — local or
+frontier, engine or orchestrator — sits behind the same sovereign capabilities.*
