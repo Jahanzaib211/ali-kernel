@@ -163,7 +163,7 @@ fn parse_score(text: &str) -> Option<u32> {
 }
 
 fn read_model_hash(config: &Config) -> String {
-    fs::read_to_string(config.ram_moat.join("golden_binary.hash"))
+    fs::read_to_string(config.ram_moat_path.join("golden_binary.hash"))
         .map(|s| s.trim().chars().take(12).collect())
         .unwrap_or_else(|_| "unknown".into())
 }

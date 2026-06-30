@@ -76,29 +76,41 @@ impl GatewayClient {
         let stream = resp.bytes_stream();
         tokio::pin!(stream);
 
+        let mut line_buf = String::new();
+
         while let Some(chunk) = stream.next().await {
             match chunk {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes);
-                    // SSE parsing: each line is "data: {json}" or "event: type"
-                    for line in text.lines() {
-                        let line = line.trim();
-                        if line.is_empty() || !line.starts_with("data:") {
-                            continue;
-                        }
-                        let data = line.strip_prefix("data:").unwrap().trim();
-                        if data == "[DONE]" {
-                            let _ = tx.send(GatewayEvent::Done).await;
-                            return Ok(());
-                        }
-                        if let Ok(v) = serde_json::from_str::<Value>(data) {
-                            // SSE data: the gateway emits "data: {...}" from llama-server
-                            // Extract content delta if present
-                            if let Some(delta) = v.pointer("/choices/0/delta/content")
-                                .and_then(|c| c.as_str())
-                            {
-                                let _ = tx.send(GatewayEvent::Token(delta.to_string())).await;
+                    for ch in text.chars() {
+                        if ch == '\n' {
+                            let line = line_buf.trim().to_string();
+                            line_buf.clear();
+                            if line.is_empty() || !line.starts_with("data:") {
+                                continue;
                             }
+                            let data = line.strip_prefix("data:").unwrap().trim();
+                            if data == "[DONE]" {
+                                let _ = tx.send(GatewayEvent::Done).await;
+                                return Ok(());
+                            }
+                            // Try to parse. If incomplete JSON (more data coming), buffer it.
+                            match serde_json::from_str::<Value>(data) {
+                                Ok(v) => {
+                                    if let Some(delta) = v.pointer("/choices/0/delta/content")
+                                        .and_then(|c| c.as_str())
+                                    {
+                                        let _ = tx.send(GatewayEvent::Token(delta.to_string())).await;
+                                    }
+                                }
+                                Err(_) => {
+                                    // Incomplete JSON on this line — the full object may span multiple lines.
+                                    // Put it back for next iteration.
+                                    line_buf.push_str(&line);
+                                }
+                            }
+                        } else if ch != '\r' {
+                            line_buf.push(ch);
                         }
                     }
                 }
@@ -109,6 +121,7 @@ impl GatewayClient {
             }
         }
 
+        // Stream ended — send Done
         let _ = tx.send(GatewayEvent::Done).await;
         Ok(())
     }

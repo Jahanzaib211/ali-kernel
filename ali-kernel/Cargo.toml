@@ -29,5 +29,12 @@ futures = "0.3"
 tokio-stream = "0.1"
 bytes = "1"
 
+# Config stacking
+figment = { workspace = true }
+toml = { workspace = true }
+dirs = { workspace = true }
+rustc_version = { workspace = true }
+hostname = { workspace = true }
+
 [dev-dependencies]
 tokio-test = "0.4"

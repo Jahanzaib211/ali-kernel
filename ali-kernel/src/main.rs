@@ -21,8 +21,12 @@ mod config;
 mod context;
 mod critique;
 mod devloop;
+mod events;
 mod evals;
 mod human_gate;
+mod identity;
+mod intent;
+mod journal;
 mod logging;
 mod memory;
 mod router;
@@ -30,7 +34,7 @@ mod security;
 mod tools;
 mod training;
 
-use config::Config;
+use config::AliConfig as Config;
 use security::Constitutions;
 
 const MAX_TOOL_ROUNDS: usize = 4;
@@ -41,18 +45,36 @@ struct AppState {
     constitutions: Arc<Constitutions>,
     client: Arc<Client>,
     human_gate: human_gate::HumanGate,
+    journal: journal::Journal,
+    intent: Arc<intent::Intent>,
+    identity: Arc<identity::IdentityStore>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let config = Config::load()?;
+
+    // Create log dir BEFORE tracing init so we can tee to it
+    logging::init_log_dir(&config.log_dir)?;
+    training::init_training_dir(&config.training_dir)?;
+
+    // Tee writer: all tracing output goes to both stdout AND logs/gateway.log
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    let gw_log_path = config.log_dir.join("gateway.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&gw_log_path)?;
+    let writer = std::io::stdout.and(file);
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "ali_kernel=info".parse().unwrap()),
         )
+        .with_writer(writer)
         .init();
 
-    let config = Config::load()?;
     info!(
         "Config loaded — gateway port {}, llama port {}",
         config.gateway_port, config.llama_port
@@ -68,8 +90,12 @@ async fn main() -> anyhow::Result<()> {
     security::attest_binary(&config)?;
     let constitutions = security::verify_constitutions(&config)?;
 
-    logging::init_log_dir(&config.log_dir)?;
-    training::init_training_dir(&config.training_dir)?;
+    // Initialize the nervous system
+    let journal = journal::Journal::new(&config)?;
+    let intent = Arc::new(intent::Intent::new(&config)?);
+    intent.load_last().await?;
+    let identity = Arc::new(identity::IdentityStore::new(&config)?);
+    identity.load().await?;
 
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(130))
@@ -80,6 +106,9 @@ async fn main() -> anyhow::Result<()> {
         constitutions: Arc::new(constitutions),
         client: Arc::new(client),
         human_gate: human_gate::HumanGate::new(),
+        journal,
+        intent: intent.clone(),
+        identity: identity.clone(),
     };
 
     let app = Router::new()
@@ -111,7 +140,7 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
                          "behavioral_shield", "eval_harness", "rlaif_capture"],
         "backend": if backend_ok { "healthy" } else { "unreachable" },
         "backend_url": state.config.backend_base(),
-        "backend_local": state.config.local_backend,
+        "backend_local": state.config.backend_url.contains("127.0.0.1"),
         "model": state.config.backend_model,
     }))
 }
@@ -172,6 +201,20 @@ async fn chat_handler(
         .and_then(|m| m.get("content").and_then(|c| c.as_str()))
         .unwrap_or("");
 
+    // Nervous system: Intent classification (limbic — goal tracking)
+    let _intent_activated = state.intent.classify(last_user_msg).await;
+    if let Some(ctx) = state.intent.get_context().await {
+        tracing::info!("INTENT state={} goal={}", ctx.state, &ctx.goal);
+    }
+
+    // Nervous system: Begin session journal entry (hippocampus)
+    let session_name = format!(
+        "{}_{}",
+        chrono::Utc::now().format("%Y-%m-%d"),
+        last_user_msg.split_whitespace().take(3).collect::<Vec<_>>().join("-")
+    );
+    state.journal.begin_session(session_name.clone(), last_user_msg.to_string()).await;
+
     let routing = router::classify(last_user_msg);
     let final_temp = temperature.unwrap_or(routing.temperature);
     let route_name = format!("{:?}", routing.strategy).to_lowercase();
@@ -182,13 +225,16 @@ async fn chat_handler(
     let memories = memory::retrieve(&user_prompt, &state.config).await;
     tracing::info!("PIPE L4 memories={}", memories.len());
 
-    // L5: Context assembly
+    // L5: Context assembly (adaptive — now includes intent + identity)
     let assembled = context::assemble(
         &state.constitutions,
         &memories,
         &state.config.system_prompt,
         &messages,
-    );
+        state.intent.clone(),
+        state.identity.clone(),
+    )
+    .await;
     let assembled_for_loop = assembled.clone();
     tracing::info!("PIPE L5 messages={}", assembled.len());
 
@@ -301,11 +347,20 @@ async fn chat_handler(
             // L4 write-back: store interaction in episodic memory
             memory::store(&state.config, &user_prompt, &final_content).await;
 
+            // Nervous system: End journal session (hippocampus)
+            let _entry = state.journal.end_session(
+                if tool_called { journal::EmotionalTone::Focused } else { journal::EmotionalTone::Neutral }
+            ).await;
+
+            // Nervous system: End intent session (limbic)
+            state.intent.on_session_end(tool_called).await;
+
             // L9: Logging
             let latency_ms = start.elapsed().as_millis() as u64;
             tracing::info!("PIPE L8 critique={critique_applied} normalized={toolcall_normalized} think_stripped={think_stripped}");
             tracing::info!(
-                "PIPE L9 latency_ms={latency_ms} tokens_in={} tokens_out={}",
+                "PIPE L9 latency_ms={} tokens_in={} tokens_out={}",
+                latency_ms,
                 response
                     .get("usage")
                     .and_then(|u| u.get("prompt_tokens"))
@@ -433,12 +488,22 @@ async fn run_agentic_loop(
                                 &state.config,
                             )
                             .await;
+                            let success = result.is_ok();
                             let raw = match result {
                                 Ok(output) => output,
                                 Err(e) => format!("Tool error: {e}"),
                             };
                             let compressed =
                                 crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
+
+                            // Nervous system: record tool in journal
+                            state.journal.record_tool(
+                                tool.tool_name.clone(),
+                                success,
+                                raw.chars().take(200).collect(),
+                            ).await;
+                            state.journal.record_file(tool.tool_name.clone()).await;
+
                             results.push(json!({
                                 "tool_call_id": format!("call_{}", i),
                                 "role": "tool",
@@ -492,6 +557,19 @@ async fn run_agentic_loop(
             .and_then(|r| r.as_array())
             .cloned()
             .unwrap_or_default();
+
+        // Nervous system: update intent state after tool round
+        if let Some(ref r) = results.first() {
+            let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let args = r.get("content").and_then(|c| c.as_str()).unwrap_or("");
+            let success = !r.get("content").and_then(|c| c.as_str()).map(|s| s.starts_with("Tool error")).unwrap_or(false);
+            state.intent.on_tool_round(name, args, success).await;
+            if !success {
+                state.journal.record_frustration(format!("tool {} failed: {}", name, &args[..args.len().min(100)])).await;
+            } else {
+                state.journal.record_win(format!("tool {} succeeded", name)).await;
+            }
+        }
 
         if results.is_empty() {
             return (enriched, tool_called, normalized);
@@ -629,7 +707,10 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
             &[],
             &state.config.system_prompt,
             &messages,
-        );
+            state.intent.clone(),
+            state.identity.clone(),
+        )
+        .await;
 
         let ok = brain::infer(
             &state.client,

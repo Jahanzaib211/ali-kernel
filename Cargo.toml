@@ -9,3 +9,22 @@ tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Config stacking
+figment = { version = "0.10", features = ["toml", "env"] }
+toml = "0.8"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Platform dirs
+dirs = "5"
+
+# System credential store
+keyring = { version = "3", features = ["v1"] }
+
+# Build-time introspection
+rustc_version = "0.4"
+
+# Hostname
+hostname = "0.4"

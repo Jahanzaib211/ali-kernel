@@ -140,7 +140,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
             crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
         if content.len() < raw.len() {
             tracing::info!(
-                "L5.5 compressed {name} output: {} → {} chars",
+                "PIPE L5.5 {name} {}→{} chars",
                 raw.len(),
                 content.len()
             );
@@ -153,7 +153,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
             "content": content
         }));
 
-        tracing::info!("Tool executed: {name} → {} chars", content.len());
+        tracing::info!("PIPE L7 tool_executed name={} chars={}", name, content.len());
     }
 
     // Inject tool results into response for caller to handle agentic loop

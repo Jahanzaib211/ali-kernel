@@ -79,6 +79,7 @@ pub struct PipelineState {
 #[allow(dead_code)]
 pub enum AppMode {
     Chat,
+    Command,
     Approval,
     Error,
 }
@@ -157,10 +158,28 @@ impl App {
             if let Ok(count) = n.trim().parse::<usize>() {
                 self.pipeline.l5_messages = Some(count);
             }
-        } else if line.contains("L5.5 compressed") {
-            self.pipeline.l5_5_compression = Some(line.trim().to_string());
-        } else if let Some(tool) = line.strip_prefix("Tool executed:") {
-            self.pipeline.l7_tool = Some(tool.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("PIPE L5.5 ") {
+            self.pipeline.l5_5_compression = Some(rest.trim().to_string());
+        } else if let Some(rest) = line.strip_prefix("PIPE L7 ") {
+            if let Some(name) = rest.strip_prefix("tool_executed name=") {
+                let parts: Vec<&str> = name.splitn(2, ' ').collect();
+                self.pipeline.l7_tool = Some(parts.first().unwrap_or(&name).to_string());
+            } else if rest.starts_with("human_gate_pending tool=") {
+                if let Some(tool) = rest.strip_prefix("human_gate_pending tool=") {
+                    let tool_name = tool.split_whitespace().next().unwrap_or(tool);
+                    self.pipeline.l7_tool = Some(tool_name.to_string());
+                }
+            } else if rest.starts_with("human_gate_approved tool=") {
+                if let Some(tool) = rest.strip_prefix("human_gate_approved tool=") {
+                    let tool_name = tool.split_whitespace().next().unwrap_or(tool);
+                    self.pipeline.l7_tool = Some(tool_name.to_string());
+                }
+            }
+        } else if let Some(detail) = line.strip_prefix("Tool executed:") {
+            let parts: Vec<&str> = detail.split_whitespace().collect();
+            if let Some(name) = parts.first() {
+                self.pipeline.l7_tool = Some(name.to_string());
+            }
         } else if let Some(detail) = line.strip_prefix("PIPE L8 ") {
             if detail.contains("critique=true") {
                 self.pipeline.l8_critique = Some(true);

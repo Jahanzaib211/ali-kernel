@@ -1,9 +1,23 @@
+//! Training data collection and logging.
+//!
+//! The training system captures three types of learning signals:
+//! 1. **SFT** — Supervised fine-tuning pairs (prompt → gold response)
+//! 2. **DPO** — Direct preference optimization pairs (chosen > rejected)
+//! 3. **Tool pairs** — Tool execution traces (cached by tool+args_hash)
+
 use anyhow::Result;
 use chrono::Utc;
 use serde_json::json;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
+
+// Re-export collectors for use by other modules
+pub mod collectors;
+
+// Re-export collector types (activated when training pipeline is wired in)
+#[allow(unused_imports)]
+pub use collectors::{EvalPairCollector, SyntheticCollector, ToolPairCollector};
 
 /// Append one SFT (supervised fine-tuning) example in alpaca format.
 /// File: {training_dir}/sft.jsonl — consumed directly by unsloth/axolotl.
