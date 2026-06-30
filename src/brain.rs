@@ -32,10 +32,11 @@ pub async fn infer(
     }
 
     let capped_tokens = max_tokens.min(MAX_TOKENS_CAP);
-    let url = format!("{}/v1/chat/completions", config.llama_base_url());
+    let url = format!("{}/chat/completions", config.backend_base());
+    let api_key = config.backend_api_key.as_deref();
 
     let mut body = json!({
-        "model": "ornith",
+        "model": config.backend_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": capped_tokens,
@@ -52,7 +53,7 @@ pub async fn infer(
     if stream {
         let resp = timeout(
             Duration::from_secs(INFER_TIMEOUT_SECS),
-            client.post(&url).json(&body).send(),
+            auth(client.post(&url).json(&body), api_key).send(),
         )
         .await
         .context("Request timed out")??;
@@ -62,15 +63,28 @@ pub async fn infer(
     }
 
     // Non-streaming with one retry on 5xx
-    let response = call_with_retry(client, &url, &body).await?;
+    let response = call_with_retry(client, &url, &body, api_key).await?;
     Ok(BrainResponse::Complete(response))
 }
 
-async fn call_with_retry(client: &Client, url: &str, body: &Value) -> Result<Value> {
+/// Attach bearer auth when the backend requires an API key (remote providers).
+fn auth(req: reqwest::RequestBuilder, api_key: Option<&str>) -> reqwest::RequestBuilder {
+    match api_key {
+        Some(k) => req.bearer_auth(k),
+        None => req,
+    }
+}
+
+async fn call_with_retry(
+    client: &Client,
+    url: &str,
+    body: &Value,
+    api_key: Option<&str>,
+) -> Result<Value> {
     let attempt = || async {
         timeout(
             Duration::from_secs(INFER_TIMEOUT_SECS),
-            client.post(url).json(body).send(),
+            auth(client.post(url).json(body), api_key).send(),
         )
         .await
         .context("Request timed out")?

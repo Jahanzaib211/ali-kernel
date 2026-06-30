@@ -54,8 +54,12 @@ async fn main() -> anyhow::Result<()> {
         config.gateway_port, config.llama_port
     );
 
-    config.check_llama_health().await?;
-    info!("llama-server health: OK");
+    config.check_backend().await?;
+    info!(
+        "Backend health: OK — {} (model {})",
+        config.backend_base(),
+        config.backend_model
+    );
 
     security::attest_binary(&config)?;
     let constitutions = security::verify_constitutions(&config)?;
@@ -92,25 +96,24 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let llama_ok = state.config.check_llama_health().await.is_ok();
-    let (llama_bin, model_path) = state.config.model_info();
+    let backend_ok = state.config.check_backend().await.is_ok();
     Json(json!({
         "status": "alive",
-        "version": "2.0.0",
-        "layers": 9,
-        "phase": 2,
-        "capabilities": ["rag_memory", "agentic_tools", "eval_harness", "rlaif_capture"],
-        "llama_server": if llama_ok { "healthy" } else { "unreachable" },
-        "llama_bin": llama_bin.display().to_string(),
-        "model": model_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown")
+        "version": "2.1.0",
+        "capabilities": ["rag_memory", "agentic_tools", "crate_aware_tools",
+                         "behavioral_shield", "eval_harness", "rlaif_capture"],
+        "backend": if backend_ok { "healthy" } else { "unreachable" },
+        "backend_url": state.config.backend_base(),
+        "backend_local": state.config.local_backend,
+        "model": state.config.backend_model,
     }))
 }
 
-async fn models_handler() -> impl IntoResponse {
+async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "object": "list",
         "data": [{
-            "id": "ornith",
+            "id": state.config.backend_model,
             "object": "model",
             "owned_by": "ornith-gateway",
             "created": 1700000000

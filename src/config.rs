@@ -3,7 +3,11 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct Config {
+    // Local llama.cpp paths — validated at startup; reserved for model-GGUF
+    // attestation (Phase 1) and an optional local supervisor.
+    #[allow(dead_code)]
     pub llama_bin: PathBuf,
+    #[allow(dead_code)]
     pub model_path: PathBuf,
     pub llama_port: u16,
     pub gateway_port: u16,
@@ -13,6 +17,13 @@ pub struct Config {
     pub training_dir: PathBuf,
     pub evals_dir: PathBuf,
     pub qdrant_url: Option<String>,
+    /// OpenAI-compatible backend base URL (ends in `/v1`). Defaults to the local
+    /// llama.cpp server; override with `BACKEND_URL` to use any provider.
+    pub backend_base: String,
+    pub backend_api_key: Option<String>,
+    pub backend_model: String,
+    /// True when serving the bundled local llama.cpp (enables binary/model checks).
+    pub local_backend: bool,
 }
 
 impl Config {
@@ -41,11 +52,25 @@ impl Config {
             PathBuf::from(std::env::var("EVALS_DIR").unwrap_or_else(|_| "evals".into()));
         let qdrant_url = std::env::var("QDRANT_URL").ok().filter(|s| !s.is_empty());
 
-        if !llama_bin.exists() {
-            anyhow::bail!("LLAMA_BIN not found: {}", llama_bin.display());
-        }
-        if !model_path.exists() {
-            anyhow::bail!("MODEL_PATH not found: {}", model_path.display());
+        // Pluggable model backend. Default = local llama.cpp; BACKEND_URL points at
+        // any OpenAI-compatible provider (must include the /v1 path).
+        let backend_override = std::env::var("BACKEND_URL").ok().filter(|s| !s.is_empty());
+        let local_backend = backend_override.is_none();
+        let backend_base =
+            backend_override.unwrap_or_else(|| format!("http://127.0.0.1:{llama_port}/v1"));
+        let backend_api_key = std::env::var("BACKEND_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let backend_model = std::env::var("BACKEND_MODEL").unwrap_or_else(|_| "ornith".into());
+
+        // Bundled-binary/model checks only matter when we serve the local backend.
+        if local_backend {
+            if !llama_bin.exists() {
+                anyhow::bail!("LLAMA_BIN not found: {}", llama_bin.display());
+            }
+            if !model_path.exists() {
+                anyhow::bail!("MODEL_PATH not found: {}", model_path.display());
+            }
         }
 
         Ok(Self {
@@ -59,25 +84,29 @@ impl Config {
             training_dir,
             evals_dir,
             qdrant_url,
+            backend_base,
+            backend_api_key,
+            backend_model,
+            local_backend,
         })
     }
 
-    pub fn llama_base_url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.llama_port)
+    /// OpenAI-compatible base URL for the active backend (ends in `/v1`).
+    pub fn backend_base(&self) -> &str {
+        &self.backend_base
     }
 
-    pub fn model_info(&self) -> (&std::path::Path, &std::path::Path) {
-        (&self.llama_bin, &self.model_path)
-    }
-
-    pub async fn check_llama_health(&self) -> Result<()> {
-        let url = format!("{}/health", self.llama_base_url());
-        let resp = reqwest::get(&url)
-            .await
-            .context("Failed to reach llama-server")?;
-        let body: serde_json::Value = resp.json().await.context("Invalid health response")?;
-        if body.get("status").and_then(|v| v.as_str()) != Some("ok") {
-            anyhow::bail!("llama-server not healthy: {}", body);
+    /// Backend reachability via the OpenAI-compatible `/models` endpoint —
+    /// works for llama.cpp and any compliant provider.
+    pub async fn check_backend(&self) -> Result<()> {
+        let url = format!("{}/models", self.backend_base);
+        let mut req = reqwest::Client::new().get(&url);
+        if let Some(key) = &self.backend_api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("Failed to reach model backend")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("backend not healthy: HTTP {}", resp.status());
         }
         Ok(())
     }

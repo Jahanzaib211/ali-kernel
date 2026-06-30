@@ -134,14 +134,14 @@ fn jaccard(a: &[String], b: &[String]) -> f32 {
 // ── Qdrant mode (optional, embeddings via llama-server) ─────────────────────
 
 async fn embed(query: &str, config: &Config) -> anyhow::Result<Vec<f32>> {
-    let url = format!("{}/v1/embeddings", config.llama_base_url());
-    let resp = reqwest::Client::new()
+    let url = format!("{}/embeddings", config.backend_base());
+    let mut req = reqwest::Client::new()
         .post(&url)
-        .json(&json!({ "input": query, "model": "ornith" }))
-        .send()
-        .await?
-        .json::<serde_json::Value>()
-        .await?;
+        .json(&json!({ "input": query, "model": config.backend_model }));
+    if let Some(key) = &config.backend_api_key {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await?.json::<serde_json::Value>().await?;
     let vec = resp
         .get("data")
         .and_then(|d| d.get(0))

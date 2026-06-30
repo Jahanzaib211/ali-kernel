@@ -1,6 +1,11 @@
 # Ornith Sovereign Gateway
 
-> Single-binary Rust runtime wrapping llama.cpp with an unrestricted OpenAI-compatible API, binary attestation, constitution integrity enforcement, semantic routing, memory injection, critique loops, and structured observability.
+> A single-binary Rust runtime that exposes an OpenAI-compatible API and **augments the model with access to the Rust ecosystem** — discovering libraries, reading documentation, executing sandboxed tools, and integrating dependencies — on top of binary attestation, constitution integrity, semantic routing, RAG memory, self-critique, and structured observability.
+
+**The gateway is the product; the model backend is pluggable.** It ships pointed at a local
+`llama.cpp` server, but `BACKEND_URL` switches it to any OpenAI-compatible provider without touching
+memory, tools, routing, or the behavioral shield. The real power is combining ecosystem access with an
+iterative develop → build → test loop — every capability benefits whichever model is behind it.
 
 [![Build](https://img.shields.io/badge/build-passing-brightgreen)](#)
 [![Rust](https://img.shields.io/badge/rust-1.78%2B-orange)](https://www.rust-lang.org)

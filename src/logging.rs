@@ -63,7 +63,11 @@ pub fn make_entry(
     PipelineLog {
         timestamp: Utc::now().to_rfc3339(),
         request_id: request_id.to_string(),
-        model: "ornith".into(),
+        model: response
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or("ornith")
+            .to_string(),
         prompt_tokens,
         completion_tokens,
         latency_ms,
