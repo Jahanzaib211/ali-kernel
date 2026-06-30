@@ -67,9 +67,43 @@ pub async fn write_project_file(
 }
 
 pub async fn cargo_add(workspace: &Path, project: &str, krate: &str) -> Result<String> {
+    if !valid_crate_spec(krate) {
+        return Err(anyhow!("invalid crate spec '{krate}'"));
+    }
     let dir = project_dir(workspace, project)?;
     let manifest = manifest(&dir);
-    run("cargo", &["add", krate, "--manifest-path", &manifest], &dir).await
+    // `--` ends option parsing so a name like `-foo` can never be read as a flag.
+    run(
+        "cargo",
+        &["add", "--manifest-path", &manifest, "--", krate],
+        &dir,
+    )
+    .await
+}
+
+/// Accept only `name` or `name@version` from the crate grammar — no leading `-`,
+/// no `=`/`:`/`/`/whitespace — to block argv flag smuggling into `cargo add`.
+fn valid_crate_spec(krate: &str) -> bool {
+    if krate.is_empty() || krate.starts_with('-') {
+        return false;
+    }
+    let (name, version) = match krate.split_once('@') {
+        Some((n, v)) => (n, Some(v)),
+        None => (krate, None),
+    };
+    let name_ok = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let version_ok = version.is_none_or(|v| {
+        !v.is_empty()
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+    });
+    name_ok && version_ok
 }
 
 /// Run `cargo {sub}` (check|build|test|clippy) and return combined output.
@@ -141,5 +175,17 @@ mod tests {
         assert!(safe_join(base, "../../etc/passwd").is_err());
         assert!(safe_join(base, "/etc/passwd").is_err());
         assert!(safe_join(base, "src/main.rs").is_ok());
+    }
+
+    #[test]
+    fn crate_spec_blocks_flag_smuggling() {
+        assert!(valid_crate_spec("serde"));
+        assert!(valid_crate_spec("tokio@1.40"));
+        assert!(valid_crate_spec("async-sqlite@0.6.0"));
+        assert!(!valid_crate_spec("--config=evil")); // flag smuggling
+        assert!(!valid_crate_spec("-Z"));
+        assert!(!valid_crate_spec("serde --features=foo")); // whitespace
+        assert!(!valid_crate_spec("../etc/passwd")); // path chars
+        assert!(!valid_crate_spec(""));
     }
 }
