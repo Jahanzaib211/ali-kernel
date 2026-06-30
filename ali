@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ── Ali Kernel Launcher ────────────────────────────────────────────────────────
+# Usage: ./ali [optional prompt]
+# Type `ali` in your terminal after adding to PATH, or run directly.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KERNEL_DIR="${SCRIPT_DIR}"
+TUI_BIN="${KERNEL_DIR}/target/release/ali-tui"
+GW_BIN="${KERNEL_DIR}/target/release/ali-kernel"
+LLAMA_BIN="${LLAMA_BIN:-/home/jahanzaib/llama.cpp/build/bin/llama-server}"
+MODEL_PATH="${MODEL_PATH:-/home/jahanzaib/ornith-1.0-9b-Q4_K_M.gguf}"
+LLAMA_PORT="${LLAMA_PORT:-8081}"
+GW_PORT="${GW_PORT:-9000}"
+
+# ── Check / start llama-server ────────────────────────────────────────────────
+if ! curl -s "http://127.0.0.1:${LLAMA_PORT}/health" > /dev/null 2>&1; then
+    echo "[ali] starting llama-server on :${LLAMA_PORT}..."
+    nohup "${LLAMA_BIN}" \
+        --port "${LLAMA_PORT}" \
+        -ngl 99 \
+        --jinja \
+        -c 16384 \
+        --cache-ram 4096 \
+        --host 0.0.0.0 \
+        -m "${MODEL_PATH}" \
+        > "${KERNEL_DIR}/logs/llama.log" 2>&1 &
+    sleep 3
+    echo "[ali] llama-server started."
+fi
+
+# ── Check / start gateway ─────────────────────────────────────────────────────
+if ! curl -s "http://127.0.0.1:${GW_PORT}/health" > /dev/null 2>&1; then
+    echo "[ali] starting Ali Kernel gateway on :${GW_PORT}..."
+    # Fresh hash on first run of ali-kernel
+    mkdir -p /tmp/ali-ram-moat
+    if [ ! -f /tmp/ali-ram-moat/golden_binary.hash ]; then
+        sha256sum "${GW_BIN}" | awk '{print $1}' > /tmp/ali-ram-moat/golden_binary.hash
+    fi
+    if [ ! -f /tmp/ali-ram-moat/soul_golden_hash.txt ]; then
+        sha256sum "${KERNEL_DIR}/constitutions/SOUL.md" | awk '{print $1}' > /tmp/ali-ram-moat/soul_golden_hash.txt
+    fi
+
+    cd "${KERNEL_DIR}"
+    nohup "${GW_BIN}" > "${KERNEL_DIR}/logs/gateway.log" 2>&1 &
+    sleep 2
+    echo "[ali] gateway started."
+fi
+
+# ── Launch TUI ────────────────────────────────────────────────────────────────
+export ALI_GATEWAY_URL="http://127.0.0.1:${GW_PORT}"
+export RUST_LOG="ali_kernel=info"
+
+if [ ! -f "${TUI_BIN}" ]; then
+    echo "[ali] TUI binary not found at ${TUI_BIN}. Build with: cargo build --release"
+    exit 1
+fi
+
+echo "[ali] launching Ali Kernel TUI..."
+exec "${TUI_BIN}" "$@"
