@@ -1,6 +1,37 @@
 # Ali Kernel — Live Status
 
-_Last updated: 2026-07-01 (session: Anthropic proxy face + compression proof)_
+_Last updated: 2026-07-02 (session: security hardening + code-quality pass)_
+
+## 2026-07-02 update — security review + hardening
+
+A full security review (tools.rs, main.rs, human_gate.rs, security.rs, config.rs, both
+crates) found and closed two real, exploitable holes:
+
+- **CRITICAL:** `read_file`/`write_file` tool calls had no path confinement — the model
+  could read/write anything the gateway process had permission to touch (`~/.ssh`,
+  `/etc/shadow`, even the attestation hash store itself, which would have let a tampered
+  binary defeat `attest_binary()`). Fixed: `AliConfig::resolve_tool_path()` now confines
+  every file-tool call to `allowed_workspace_paths` (launch dir + workspace_dir +
+  ali_dir by default), with regression tests for both legitimate access and
+  traversal/absolute-path escape attempts.
+- **CRITICAL:** `CorsLayer::permissive()` on the axum router meant any webpage's
+  background JS could reach `127.0.0.1:9000` and drive tool calls with zero user
+  interaction beyond an open tab. Removed entirely — no legitimate client needs
+  cross-origin browser access.
+- Also closed two vestigial `0.0.0.0` config defaults that could have silently
+  reintroduced the earlier network-exposure fix if ever wired into a bind call.
+
+Also: `cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are both
+fully clean (were 19 warnings + formatting drift). Genuinely-reserved future-feature
+code (the `events.rs` telemetry-spine scaffolding, unused `Intent`/`Journal`/`Identity`
+API surface) is kept but explicitly marked `#[allow(dead_code)]` with a note on what
+it's for, instead of silently warning or being deleted. Fixed one flaky test
+(`identity.rs`'s tests shared one hardcoded temp path and raced under parallel test
+execution).
+
+See `GUIDE.md` for a plain-English writeup of all of this, written for a non-programmer.
+
+---
 
 This is the plain-English status of the build: what runs, how the local model actually
 behaves, and what's next. The full engineering roadmap lives in the plan file
