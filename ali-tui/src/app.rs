@@ -62,8 +62,7 @@ impl RiskLevel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PipelineState {
     pub l3_route: Option<String>,
     pub l4_memories: Option<usize>,
@@ -73,7 +72,6 @@ pub struct PipelineState {
     pub l8_critique: Option<bool>,
     pub l9_tokens: Option<String>,
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(dead_code)]

@@ -4,11 +4,12 @@ mod gateway;
 
 use anyhow::Result;
 use app::{App, AppMode, PendingApproval, RiskLevel};
-use config::{TuiConfig, Theme};
+use config::{Theme, TuiConfig};
 use crossterm::{
     event::{DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use gateway::GatewayClient;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -21,7 +22,6 @@ use serde_json::Value;
 use std::io;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
-use gateway::GatewayClient;
 
 fn tools_as_values() -> Vec<Value> {
     let tools = [
@@ -30,7 +30,10 @@ fn tools_as_values() -> Vec<Value> {
         r#"{"type":"function","function":{"name":"crate_search","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}"#,
         r#"{"type":"function","function":{"name":"docs_lookup","parameters":{"type":"object","properties":{"crate":{"type":"string"}},"required":["crate"]}}}"#,
     ];
-    tools.iter().filter_map(|t| serde_json::from_str(t).ok()).collect()
+    tools
+        .iter()
+        .filter_map(|t| serde_json::from_str(t).ok())
+        .collect()
 }
 
 fn render_chat(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
@@ -55,13 +58,12 @@ fn render_chat(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         })
         .collect();
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(" Chat ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let list = List::new(items).block(
+        Block::default()
+            .title(" Chat ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
 
     let mut list_state = ratatui::widgets::ListState::default();
     if !app.messages.is_empty() {
@@ -90,7 +92,11 @@ fn render_input(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let input = Paragraph::new(Line::from(vec![Span::raw(&prompt).fg(prompt_style)]))
         .block(
             Block::default()
-                .title(if app.mode == AppMode::Command { " Command (type : to enter commands) " } else { " Input (type / for slash commands) " })
+                .title(if app.mode == AppMode::Command {
+                    " Command (type : to enter commands) "
+                } else {
+                    " Input (type / for slash commands) "
+                })
                 .borders(Borders::ALL)
                 .border_style(ratatui::style::Style::default().fg(border_color)),
         )
@@ -99,42 +105,86 @@ fn render_input(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
     // Render hint when empty
     if app.current_input.is_empty() && app.mode == AppMode::Chat {
-        let hint = Paragraph::new(Line::from(vec![Span::raw("  Type /help for commands, /clear to reset").dim()]))
-            .style(ratatui::style::Style::default().bg(t.bg).fg(t.muted));
+        let hint = Paragraph::new(Line::from(vec![Span::raw(
+            "  Type /help for commands, /clear to reset",
+        )
+        .dim()]))
+        .style(ratatui::style::Style::default().bg(t.bg).fg(t.muted));
         f.render_widget(hint, area);
     }
 }
 
 fn render_pipeline(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let dash = "—";
-    let route = app.pipeline.l3_route.clone().unwrap_or_else(|| dash.to_string());
-    let memories = app.pipeline.l4_memories.map(|n| n.to_string()).unwrap_or_else(|| dash.to_string());
-    let messages = app.pipeline.l5_messages.map(|n| n.to_string()).unwrap_or_else(|| dash.to_string());
-    let tool = app.pipeline.l7_tool.clone().unwrap_or_else(|| dash.to_string());
+    let route = app
+        .pipeline
+        .l3_route
+        .clone()
+        .unwrap_or_else(|| dash.to_string());
+    let memories = app
+        .pipeline
+        .l4_memories
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| dash.to_string());
+    let messages = app
+        .pipeline
+        .l5_messages
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| dash.to_string());
+    let tool = app
+        .pipeline
+        .l7_tool
+        .clone()
+        .unwrap_or_else(|| dash.to_string());
     let critique = app.pipeline.l8_critique.unwrap_or(false);
     let critique_str = if critique { "yes" } else { "no" };
     let critique_color = if critique { t.success } else { t.muted };
-    let tokens = app.pipeline.l9_tokens.clone().unwrap_or_else(|| dash.to_string());
-    let compression = app.pipeline.l5_5_compression.clone().unwrap_or_else(|| dash.to_string());
+    let tokens = app
+        .pipeline
+        .l9_tokens
+        .clone()
+        .unwrap_or_else(|| dash.to_string());
+    let compression = app
+        .pipeline
+        .l5_5_compression
+        .clone()
+        .unwrap_or_else(|| dash.to_string());
 
     // System info block
     let sys_lines = vec![
         Line::from(vec![Span::raw(" SYSTEM ").bold().white().on_black()]),
-        Line::from(vec![Span::raw(" model:    ").dim(), Span::raw("ornith-9b").fg(t.accent)]),
-        Line::from(vec![Span::raw(" route:    ").dim(), Span::raw(&route).fg(t.accent)]),
-        Line::from(vec![Span::raw(" memories: ").dim(), Span::raw(&memories).fg(t.accent)]),
-        Line::from(vec![Span::raw(" messages: ").dim(), Span::raw(&messages).fg(t.accent)]),
-        Line::from(vec![Span::raw(" tokens:   ").dim(), Span::raw(&tokens).fg(t.accent2)]),
-        Line::from(vec![Span::raw(" compress: ").dim(), Span::raw(&compression).fg(t.accent2)]),
+        Line::from(vec![
+            Span::raw(" model:    ").dim(),
+            Span::raw("ornith-9b").fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" route:    ").dim(),
+            Span::raw(&route).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" memories: ").dim(),
+            Span::raw(&memories).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" messages: ").dim(),
+            Span::raw(&messages).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" tokens:   ").dim(),
+            Span::raw(&tokens).fg(t.accent2),
+        ]),
+        Line::from(vec![
+            Span::raw(" compress: ").dim(),
+            Span::raw(&compression).fg(t.accent2),
+        ]),
     ];
 
-    let sys_block = Paragraph::new(sys_lines)
-        .block(
-            Block::default()
-                .title(" Kernel ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let sys_block = Paragraph::new(sys_lines).block(
+        Block::default()
+            .title(" Kernel ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
 
     // Tool block
     let tool_lines = vec![
@@ -142,31 +192,36 @@ fn render_pipeline(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Line::from(vec![Span::raw(" last:  ").dim()]),
         Line::from(vec![Span::raw(&tool).fg(t.warning).bold()]),
     ];
-    let tool_block = Paragraph::new(tool_lines)
-        .block(
-            Block::default()
-                .title(" Execution ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let tool_block = Paragraph::new(tool_lines).block(
+        Block::default()
+            .title(" Execution ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
 
     // Critique block
     let crit_lines = vec![
         Line::from(vec![Span::raw(" CRITIQUE ").bold().white().on_black()]),
-        Line::from(vec![Span::raw(" applied: ").dim(), Span::raw(critique_str).fg(critique_color).bold()]),
+        Line::from(vec![
+            Span::raw(" applied: ").dim(),
+            Span::raw(critique_str).fg(critique_color).bold(),
+        ]),
     ];
-    let crit_block = Paragraph::new(crit_lines)
-        .block(
-            Block::default()
-                .title(" Self-Review ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let crit_block = Paragraph::new(crit_lines).block(
+        Block::default()
+            .title(" Self-Review ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
 
     // Stack them vertically
     let v_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Length(1), Constraint::Percentage(50)])
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Length(1),
+            Constraint::Percentage(50),
+        ])
         .split(area);
 
     let h_chunks_top = Layout::default()
@@ -183,8 +238,18 @@ fn render_pipeline(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     f.render_widget(tool_block, h_chunks_top[1]);
     f.render_widget(crit_block, h_chunks_bot[0]);
     f.render_widget(
-        Paragraph::new(vec![Line::from(""), Line::from(" L7: TODO"), Line::from(" L8: TODO"), Line::from(" L9: TODO")])
-            .block(Block::default().title(" Layers ").borders(Borders::ALL).border_style(ratatui::style::Style::default().fg(t.border))),
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(" L7: TODO"),
+            Line::from(" L8: TODO"),
+            Line::from(" L9: TODO"),
+        ])
+        .block(
+            Block::default()
+                .title(" Layers ")
+                .borders(Borders::ALL)
+                .border_style(ratatui::style::Style::default().fg(t.border)),
+        ),
         h_chunks_bot[1],
     );
 }
@@ -193,57 +258,133 @@ fn render_config_panel(f: &mut Frame, area: Rect, cfg: &TuiConfig, t: &Theme) {
     let lines = vec![
         Line::from(vec![Span::raw(" Config Stack ").bold().white()]),
         Line::from(vec![Span::raw("─────────────────────────────────").dim()]),
-        Line::from(vec![Span::raw(" gateway_port:  "), Span::raw(format!("{}", cfg.gateway_port)).fg(t.accent)]),
-        Line::from(vec![Span::raw(" llama_port:    "), Span::raw(format!("{}", cfg.llama_port)).fg(t.accent)]),
-        Line::from(vec![Span::raw(" human_gate:    "), Span::raw(format!("{}", cfg.human_gate_enabled)).fg(t.warning)]),
-        Line::from(vec![Span::raw(" backend_url:    "), Span::raw(&cfg.backend_url).fg(t.accent)]),
-        Line::from(vec![Span::raw(" backend_model:  "), Span::raw(&cfg.backend_model).fg(t.accent)]),
-        Line::from(vec![Span::raw(" claude_enabled: "), Span::raw(format!("{}", cfg.claude_enabled)).fg(t.warning)]),
-        Line::from(vec![Span::raw(" tui_theme:     "), Span::raw(&cfg.tui_theme).fg(t.success)]),
+        Line::from(vec![
+            Span::raw(" gateway_port:  "),
+            Span::raw(format!("{}", cfg.gateway_port)).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" llama_port:    "),
+            Span::raw(format!("{}", cfg.llama_port)).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" human_gate:    "),
+            Span::raw(format!("{}", cfg.human_gate_enabled)).fg(t.warning),
+        ]),
+        Line::from(vec![
+            Span::raw(" backend_url:    "),
+            Span::raw(&cfg.backend_url).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" backend_model:  "),
+            Span::raw(&cfg.backend_model).fg(t.accent),
+        ]),
+        Line::from(vec![
+            Span::raw(" claude_enabled: "),
+            Span::raw(format!("{}", cfg.claude_enabled)).fg(t.warning),
+        ]),
+        Line::from(vec![
+            Span::raw(" tui_theme:     "),
+            Span::raw(&cfg.tui_theme).fg(t.success),
+        ]),
         Line::from(vec![Span::raw("─────────────────────────────────").dim()]),
-        Line::from(vec![Span::raw(" identity_version: ").dim(), Span::raw(&cfg.identity_version).dim()]),
+        Line::from(vec![
+            Span::raw(" identity_version: ").dim(),
+            Span::raw(&cfg.identity_version).dim(),
+        ]),
     ];
 
-    let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Config ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Config ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
     f.render_widget(para, area);
 }
 
 fn render_command_help(f: &mut Frame, area: Rect, t: &Theme) {
     let slash_lines = vec![
-        Line::from(vec![Span::raw(" SLASH COMMANDS ").bold().white().on_black()]),
-        Line::from(vec![Span::raw("/help   ").cyan().bold(), Span::raw("— list capabilities").dim()]),
-        Line::from(vec![Span::raw("/clear  ").cyan().bold(), Span::raw("— reset conversation").dim()]),
-        Line::from(vec![Span::raw("/retry  ").cyan().bold(), Span::raw("— re-attempt last request").dim()]),
-        Line::from(vec![Span::raw("/tools  ").cyan().bold(), Span::raw("— show available tools").dim()]),
-        Line::from(vec![Span::raw("/status ").cyan().bold(), Span::raw("— system status").dim()]),
-        Line::from(vec![Span::raw("/exit   ").cyan().bold(), Span::raw("— quit").dim()]),
+        Line::from(vec![Span::raw(" SLASH COMMANDS ")
+            .bold()
+            .white()
+            .on_black()]),
+        Line::from(vec![
+            Span::raw("/help   ").cyan().bold(),
+            Span::raw("— list capabilities").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw("/clear  ").cyan().bold(),
+            Span::raw("— reset conversation").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw("/retry  ").cyan().bold(),
+            Span::raw("— re-attempt last request").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw("/tools  ").cyan().bold(),
+            Span::raw("— show available tools").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw("/status ").cyan().bold(),
+            Span::raw("— system status").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw("/exit   ").cyan().bold(),
+            Span::raw("— quit").dim(),
+        ]),
         Line::from(vec![Span::raw("").dim()]),
-        Line::from(vec![Span::raw(" COLON COMMANDS ").bold().white().on_black()]),
-        Line::from(vec![Span::raw(":set <k> <v>  ").fg(t.success), Span::raw("set config (session)").dim()]),
-        Line::from(vec![Span::raw(":setg <k> <v> ").fg(t.success), Span::raw("set + save to disk").dim()]),
-        Line::from(vec![Span::raw(":get <key>     ").fg(t.accent), Span::raw("show config value").dim()]),
-        Line::from(vec![Span::raw(":show           ").fg(t.accent), Span::raw("show all config").dim()]),
-        Line::from(vec![Span::raw(":save           ").fg(t.warning), Span::raw("persist config").dim()]),
-        Line::from(vec![Span::raw(":load           ").fg(t.warning), Span::raw("reload config").dim()]),
-        Line::from(vec![Span::raw(":identity       ").fg(t.accent2), Span::raw("system self-description").dim()]),
-        Line::from(vec![Span::raw(":status         ").fg(t.accent2), Span::raw("gateway + llama health").dim()]),
-        Line::from(vec![Span::raw(":tools          ").fg(t.accent2), Span::raw("list available tools").dim()]),
-        Line::from(vec![Span::raw(":quit / Ctrl+d  ").fg(t.error), Span::raw("exit").dim()]),
+        Line::from(vec![Span::raw(" COLON COMMANDS ")
+            .bold()
+            .white()
+            .on_black()]),
+        Line::from(vec![
+            Span::raw(":set <k> <v>  ").fg(t.success),
+            Span::raw("set config (session)").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":setg <k> <v> ").fg(t.success),
+            Span::raw("set + save to disk").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":get <key>     ").fg(t.accent),
+            Span::raw("show config value").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":show           ").fg(t.accent),
+            Span::raw("show all config").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":save           ").fg(t.warning),
+            Span::raw("persist config").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":load           ").fg(t.warning),
+            Span::raw("reload config").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":identity       ").fg(t.accent2),
+            Span::raw("system self-description").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":status         ").fg(t.accent2),
+            Span::raw("gateway + llama health").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":tools          ").fg(t.accent2),
+            Span::raw("list available tools").dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(":quit / Ctrl+d  ").fg(t.error),
+            Span::raw("exit").dim(),
+        ]),
     ];
 
-    let para = Paragraph::new(slash_lines)
-        .block(
-            Block::default()
-                .title(" Ali Kernel Commands ")
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let para = Paragraph::new(slash_lines).block(
+        Block::default()
+            .title(" Ali Kernel Commands ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
     f.render_widget(para, area);
 }
 
@@ -266,7 +407,9 @@ fn render_approval_card(f: &mut Frame, area: Rect, approvals: &[PendingApproval]
         Span::raw(" TOOL CALL ").bold().white().on_red(),
         Span::raw("  "),
         Span::raw(format!("{} ", approval.tool_name)).bold().white(),
-        Span::raw(format!("[{}] ", risk_label)).bold().fg(risk_color),
+        Span::raw(format!("[{}] ", risk_label))
+            .bold()
+            .fg(risk_color),
         Span::raw(format!("#{}", approval.tool_index)).dim(),
     ]);
 
@@ -280,25 +423,31 @@ fn render_approval_card(f: &mut Frame, area: Rect, approvals: &[PendingApproval]
     let lines = vec![
         header,
         Line::from(""),
-        Line::from(vec![Span::raw(" Args: ").bold(), Span::raw(&args_preview).fg(t.fg)]),
+        Line::from(vec![
+            Span::raw(" Args: ").bold(),
+            Span::raw(&args_preview).fg(t.fg),
+        ]),
         Line::from(""),
         help,
     ];
 
-    let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Approval #1 ".to_string())
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(risk_color)),
-        );
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" Approval #1 ".to_string())
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(risk_color)),
+    );
     f.render_widget(para, area);
 }
 
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App, cfg: &TuiConfig) {
     let t = &cfg.theme;
     let conn_color = if app.connected { t.success } else { t.error };
-    let conn_label = if app.connected { "connected" } else { "disconnected" };
+    let conn_label = if app.connected {
+        "connected"
+    } else {
+        "disconnected"
+    };
 
     let mode_str = match app.mode {
         AppMode::Chat => "chat",
@@ -343,8 +492,8 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, cfg: &TuiConfig) {
         Span::raw(route_info).fg(t.accent),
     ]);
 
-    let para = Paragraph::new(vec![row1, row2])
-        .style(ratatui::style::Style::default().bg(t.bg).fg(t.fg));
+    let para =
+        Paragraph::new(vec![row1, row2]).style(ratatui::style::Style::default().bg(t.bg).fg(t.fg));
     f.render_widget(para, area);
 }
 
@@ -352,17 +501,24 @@ fn render_current_message(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     if app.streaming_content.is_empty() {
         // Show last assistant message instead
         if let Some(last) = app.messages.iter().rev().find(|m| m.role == "assistant") {
-            let lines: Vec<Line> = last.content.lines().take(4).map(|l| {
-                Line::from(vec![Span::raw("[a] ").fg(t.assistant_msg), Span::raw(l).fg(t.fg)])
-            }).collect();
+            let lines: Vec<Line> = last
+                .content
+                .lines()
+                .take(4)
+                .map(|l| {
+                    Line::from(vec![
+                        Span::raw("[a] ").fg(t.assistant_msg),
+                        Span::raw(l).fg(t.fg),
+                    ])
+                })
+                .collect();
             if !lines.is_empty() {
-                let para = Paragraph::new(lines)
-                    .block(
-                        Block::default()
-                            .title(" Last Response ")
-                            .borders(Borders::ALL)
-                            .border_style(ratatui::style::Style::default().fg(t.border)),
-                    );
+                let para = Paragraph::new(lines).block(
+                    Block::default()
+                        .title(" Last Response ")
+                        .borders(Borders::ALL)
+                        .border_style(ratatui::style::Style::default().fg(t.border)),
+                );
                 f.render_widget(para, area);
             }
         }
@@ -371,18 +527,28 @@ fn render_current_message(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
 
     let content = app.streaming_content.clone();
 
-    let lines: Vec<Line> = content.lines().take(5).map(|l| {
-        Line::from(vec![Span::raw("[a] ").fg(t.assistant_msg), Span::raw(l).fg(t.fg)])
-    }).collect();
+    let lines: Vec<Line> = content
+        .lines()
+        .take(5)
+        .map(|l| {
+            Line::from(vec![
+                Span::raw("[a] ").fg(t.assistant_msg),
+                Span::raw(l).fg(t.fg),
+            ])
+        })
+        .collect();
 
-    let streaming_indicator = if app.is_typing { " ● streaming..." } else { "" };
-    let para = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(format!(" Assistant{}", streaming_indicator))
-                .borders(Borders::ALL)
-                .border_style(ratatui::style::Style::default().fg(t.border)),
-        );
+    let streaming_indicator = if app.is_typing {
+        " ● streaming..."
+    } else {
+        ""
+    };
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(format!(" Assistant{}", streaming_indicator))
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
     f.render_widget(para, area);
 }
 
@@ -427,13 +593,15 @@ fn ui(f: &mut Frame, app: &App, cfg: &TuiConfig) {
         AppMode::Command => {
             // Command output / status in msg area
             let status_text = app.status_msg.clone().unwrap_or_default();
-            let para = Paragraph::new(Line::from(vec![Span::raw(&status_text).fg(cfg.theme.warning)]))
-                .block(
-                    Block::default()
-                        .title(" Output ")
-                        .borders(Borders::ALL)
-                        .border_style(ratatui::style::Style::default().fg(cfg.theme.border)),
-                );
+            let para = Paragraph::new(Line::from(vec![
+                Span::raw(&status_text).fg(cfg.theme.warning)
+            ]))
+            .block(
+                Block::default()
+                    .title(" Output ")
+                    .borders(Borders::ALL)
+                    .border_style(ratatui::style::Style::default().fg(cfg.theme.border)),
+            );
             f.render_widget(para, msg_area);
         }
     }
@@ -451,7 +619,8 @@ async fn handle_slash_command(cmd: &str, _args: &[String], app: &mut App) -> Opt
              /tools  — list available tools\n\
              /status — system status\n\
              /exit   — quit\n\n\
-             Type /model <prompt> to query the model directly.".into(),
+             Type /model <prompt> to query the model directly."
+                .into(),
         ),
         "/clear" | ":clear" => {
             app.messages.clear();
@@ -462,12 +631,16 @@ async fn handle_slash_command(cmd: &str, _args: &[String], app: &mut App) -> Opt
         }
         "/retry" | ":retry" => {
             // Find the last user message
-            let last_user_content = app.messages.iter().rev()
+            let last_user_content = app
+                .messages
+                .iter()
+                .rev()
                 .find(|m| m.role == "user")
                 .map(|m| m.content.clone());
             if let Some(content) = last_user_content {
                 app.current_input = content.clone();
-                app.messages.retain(|m| !(m.role == "user" && m.content == content));
+                app.messages
+                    .retain(|m| !(m.role == "user" && m.content == content));
                 app.status_msg = Some("Retrying last request...".into());
                 None
             } else {
@@ -485,7 +658,8 @@ async fn handle_slash_command(cmd: &str, _args: &[String], app: &mut App) -> Opt
              cargo_add(proj,dep)  [HIGH]    — add dependency\n\
              cargo_build          [HIGH]    — build project\n\
              cargo_test           [HIGH]    — run tests\n\
-             cargo_clippy         [HIGH]    — run clippy".into(),
+             cargo_clippy         [HIGH]    — run clippy"
+                .into(),
         ),
         "/status" | ":status" => Some(
             "Ali Kernel — system status:\n\
@@ -493,7 +667,8 @@ async fn handle_slash_command(cmd: &str, _args: &[String], app: &mut App) -> Opt
              llama:    :8081  (local model)\n\
              model:    ornith-9b-q4_k_m\n\
              config:   ~/.config/ali/config.toml\n\
-             Run :status for full details.".into(),
+             Run :status for full details."
+                .into(),
         ),
         "/exit" | ":exit" | "/quit" | ":quit" => {
             app.status_msg = Some("Goodbye.".into());
@@ -501,7 +676,10 @@ async fn handle_slash_command(cmd: &str, _args: &[String], app: &mut App) -> Opt
         }
         _ => {
             // Unknown slash command — pass through to model
-            Some(format!("Unknown command: {}. Type /help for available commands.", cmd))
+            Some(format!(
+                "Unknown command: {}. Type /help for available commands.",
+                cmd
+            ))
         }
     }
 }
@@ -516,16 +694,18 @@ fn parse_command(input: &str) -> (String, Vec<String>) {
         return ("".into(), vec![]);
     };
     let rest = &input[prefix.1..];
-    let parts: Vec<String> = rest
-        .split_whitespace()
-        .map(String::from)
-        .collect();
+    let parts: Vec<String> = rest.split_whitespace().map(String::from).collect();
     let cmd = parts.first().cloned().unwrap_or_default();
     let args = parts.get(1..).unwrap_or(&[]).to_vec();
     (format!("{}{}", prefix.0, cmd), args)
 }
 
-async fn handle_command(cmd: &str, args: &[String], app: &mut App, cfg: &mut TuiConfig) -> Option<String> {
+async fn handle_command(
+    cmd: &str,
+    args: &[String],
+    app: &mut App,
+    cfg: &mut TuiConfig,
+) -> Option<String> {
     match (cmd, args) {
         // :set <key> <value> — ephemeral session config
         ("set", [key, value, ..]) => {
@@ -548,26 +728,24 @@ async fn handle_command(cmd: &str, args: &[String], app: &mut App, cfg: &mut Tui
             }
         }
         // :get <key>
-        ("get", [key]) => {
-            match key.as_str() {
-                "gateway_port" => Some(format!("gateway_port = {}", cfg.gateway_port)),
-                "llama_port" => Some(format!("llama_port = {}", cfg.llama_port)),
-                "human_gate" | "human_gate_enabled" => {
-                    Some(format!("human_gate = {}", cfg.human_gate_enabled))
-                }
-                "backend_url" => Some(format!("backend_url = {}", cfg.backend_url)),
-                "backend_model" => Some(format!("backend_model = {}", cfg.backend_model)),
-                "claude_enabled" => Some(format!("claude_enabled = {}", cfg.claude_enabled)),
-                "claude_model" => Some(format!("claude_model = {}", cfg.claude_model)),
-                "tui_theme" => Some(format!("tui_theme = {}", cfg.tui_theme)),
-                "tui_pipeline_panel" => {
-                    Some(format!("tui_pipeline_panel = {}", cfg.tui_pipeline_panel))
-                }
-                "identity_version" => Some(format!("version = {}", cfg.identity_version)),
-                "identity_git_hash" => Some(format!("git_hash = {}", cfg.identity_git_hash)),
-                _ => Some(format!("Unknown key: {}", key)),
+        ("get", [key]) => match key.as_str() {
+            "gateway_port" => Some(format!("gateway_port = {}", cfg.gateway_port)),
+            "llama_port" => Some(format!("llama_port = {}", cfg.llama_port)),
+            "human_gate" | "human_gate_enabled" => {
+                Some(format!("human_gate = {}", cfg.human_gate_enabled))
             }
-        }
+            "backend_url" => Some(format!("backend_url = {}", cfg.backend_url)),
+            "backend_model" => Some(format!("backend_model = {}", cfg.backend_model)),
+            "claude_enabled" => Some(format!("claude_enabled = {}", cfg.claude_enabled)),
+            "claude_model" => Some(format!("claude_model = {}", cfg.claude_model)),
+            "tui_theme" => Some(format!("tui_theme = {}", cfg.tui_theme)),
+            "tui_pipeline_panel" => {
+                Some(format!("tui_pipeline_panel = {}", cfg.tui_pipeline_panel))
+            }
+            "identity_version" => Some(format!("version = {}", cfg.identity_version)),
+            "identity_git_hash" => Some(format!("git_hash = {}", cfg.identity_git_hash)),
+            _ => Some(format!("Unknown key: {}", key)),
+        },
         // :show — all config
         ("show", []) => {
             let lines = vec![
@@ -585,50 +763,48 @@ async fn handle_command(cmd: &str, args: &[String], app: &mut App, cfg: &mut Tui
             Some(lines.join("\n"))
         }
         // :save
-        ("save", []) => {
-            match cfg.save().await {
-                Ok(path) => Some(format!("Saved to {:?}", path)),
-                Err(e) => Some(format!("Save failed: {}", e)),
-            }
-        }
+        ("save", []) => match cfg.save().await {
+            Ok(path) => Some(format!("Saved to {:?}", path)),
+            Err(e) => Some(format!("Save failed: {}", e)),
+        },
         // :load
         ("load", []) => {
             *cfg = TuiConfig::load().await;
             Some("Reloaded config from ~/.config/ali/config.toml".into())
         }
         // :identity
-        ("identity", []) => {
-            Some(format!(
-                "Ali Kernel v{}\nbuild: {}\ngit: {}",
-                cfg.identity_version, cfg.identity_build_ts, cfg.identity_git_hash
-            ))
-        }
+        ("identity", []) => Some(format!(
+            "Ali Kernel v{}\nbuild: {}\ngit: {}",
+            cfg.identity_version, cfg.identity_build_ts, cfg.identity_git_hash
+        )),
         // :status
-        ("status", []) => {
-            Some(format!(
-                "gateway: http://{}:{}\nllama: http://127.0.0.1:{}/v1\nclaude: {}",
-                cfg.gateway_host, cfg.gateway_port, cfg.llama_port,
-                if cfg.claude_enabled { "enabled" } else { "disabled" }
-            ))
-        }
+        ("status", []) => Some(format!(
+            "gateway: http://{}:{}\nllama: http://127.0.0.1:{}/v1\nclaude: {}",
+            cfg.gateway_host,
+            cfg.gateway_port,
+            cfg.llama_port,
+            if cfg.claude_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        )),
         // :tools
-        ("tools", []) => {
-            Some(
-                [
-                    "read_file(path)          — read file contents [LOW]",
-                    "write_file(path, content) — write file [MED]",
-                    "bash_exec(command)        — run bash command [MED]",
-                    "crate_search(query)       — search crates.io [LOW]",
-                    "docs_lookup(crate)        — crate documentation [LOW]",
-                    "cargo_new(project)        — create cargo project [HIGH]",
-                    "cargo_add(project, crate) — add dependency [HIGH]",
-                    "cargo_build               — build project [HIGH]",
-                    "cargo_test                — run tests [HIGH]",
-                    "cargo_clippy              — run clippy [HIGH]",
-                ]
-                .join("\n"),
-            )
-        }
+        ("tools", []) => Some(
+            [
+                "read_file(path)          — read file contents [LOW]",
+                "write_file(path, content) — write file [MED]",
+                "bash_exec(command)        — run bash command [MED]",
+                "crate_search(query)       — search crates.io [LOW]",
+                "docs_lookup(crate)        — crate documentation [LOW]",
+                "cargo_new(project)        — create cargo project [HIGH]",
+                "cargo_add(project, crate) — add dependency [HIGH]",
+                "cargo_build               — build project [HIGH]",
+                "cargo_test                — run tests [HIGH]",
+                "cargo_clippy              — run clippy [HIGH]",
+            ]
+            .join("\n"),
+        ),
         // :quit
         ("quit", []) | ("exit", []) => {
             app.status_msg = Some("Goodbye.".into());
@@ -639,17 +815,16 @@ async fn handle_command(cmd: &str, args: &[String], app: &mut App, cfg: &mut Tui
             if cmd.is_empty() {
                 None
             } else {
-                Some(format!("Unknown command: :{}\nType :show for available commands.", cmd))
+                Some(format!(
+                    "Unknown command: :{}\nType :show for available commands.",
+                    cmd
+                ))
             }
         }
     }
 }
 
-async fn run_tui(
-    app: Arc<RwLock<App>>,
-    gw: GatewayClient,
-    mut cfg: TuiConfig,
-) -> Result<()> {
+async fn run_tui(app: Arc<RwLock<App>>, gw: GatewayClient, mut cfg: TuiConfig) -> Result<()> {
     let mut stdout = io::stdout();
     crossterm::execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     enable_raw_mode()?;
@@ -712,7 +887,9 @@ async fn run_tui(
 
                         if input.starts_with(':') {
                             let (cmd, args) = parse_command(&input);
-                            if let Some(output) = handle_command(&cmd, &args, &mut app_guard, &mut cfg).await {
+                            if let Some(output) =
+                                handle_command(&cmd, &args, &mut app_guard, &mut cfg).await
+                            {
                                 app_guard.status_msg = Some(output);
                             } else {
                                 // Quit command
@@ -722,7 +899,8 @@ async fn run_tui(
                         } else if input.starts_with('/') {
                             // Slash commands: handled locally for instant response
                             let (slash_cmd, slash_args) = parse_command(&input);
-                            let output = handle_slash_command(&slash_cmd, &slash_args, &mut app_guard).await;
+                            let output =
+                                handle_slash_command(&slash_cmd, &slash_args, &mut app_guard).await;
                             if let Some(msg) = output {
                                 app_guard.status_msg = Some(msg);
                             } else {
@@ -749,14 +927,20 @@ async fn run_tui(
                             let gw_clone = gw.clone();
 
                             tokio::spawn(async move {
-                                let (gw_tx, mut gw_rx) = mpsc::channel::<gateway::GatewayEvent>(100);
+                                let (gw_tx, mut gw_rx) =
+                                    mpsc::channel::<gateway::GatewayEvent>(100);
 
                                 let gw_clone2 = gw_clone.clone();
                                 let app_clone2 = app_clone.clone();
 
                                 tokio::spawn(async move {
                                     if let Err(e) = gw_clone2
-                                        .chat(msgs, tools_as_values(), cfg.human_gate_enabled, gw_tx)
+                                        .chat(
+                                            msgs,
+                                            tools_as_values(),
+                                            cfg.human_gate_enabled,
+                                            gw_tx,
+                                        )
                                         .await
                                     {
                                         let mut a = app_clone2.write().await;
@@ -841,13 +1025,17 @@ async fn run_tui(
                     }
                     // Ctrl+C: quit
                     KeyCode::Char('c')
-                        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        if key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
                     {
                         break;
                     }
                     // Ctrl+D: exit command mode without saving
                     KeyCode::Char('d')
-                        if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        if key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
                     {
                         if app_guard.mode == AppMode::Command {
                             app_guard.mode = AppMode::Chat;
@@ -885,9 +1073,7 @@ async fn run_tui(
                         }
                     }
                     // Regular character input
-                    KeyCode::Char(c)
-                        if app_guard.mode != AppMode::Approval =>
-                    {
+                    KeyCode::Char(c) if app_guard.mode != AppMode::Approval => {
                         app_guard.current_input.push(c);
                     }
                     _ => {}
@@ -897,7 +1083,11 @@ async fn run_tui(
     }
 
     disable_raw_mode()?;
-    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableBracketedPaste)?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     Ok(())
 }
 
@@ -912,7 +1102,9 @@ async fn main() -> Result<()> {
     if let Ok(h) = gw.health_check().await {
         println!("Gateway: {}", h);
     } else {
-        eprintln!("Warning: gateway unreachable. Type 'ali' with gateway running for full experience.");
+        eprintln!(
+            "Warning: gateway unreachable. Type 'ali' with gateway running for full experience."
+        );
     }
 
     let app = Arc::new(RwLock::new(App::new()));

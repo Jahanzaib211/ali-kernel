@@ -330,16 +330,46 @@ impl TuiConfig {
             tokio::fs::create_dir_all(parent).await?;
         }
         let table = toml::map::Map::from_iter([
-            ("gateway_port".to_string(), toml::Value::Integer(self.gateway_port as i64)),
-            ("llama_port".to_string(), toml::Value::Integer(self.llama_port as i64)),
-            ("backend_url".to_string(), toml::Value::String(self.backend_url.clone())),
-            ("backend_model".to_string(), toml::Value::String(self.backend_model.clone())),
-            ("human_gate".to_string(), toml::Value::Boolean(self.human_gate_enabled)),
-            ("claude_enabled".to_string(), toml::Value::Boolean(self.claude_enabled)),
-            ("claude_model".to_string(), toml::Value::String(self.claude_model.clone())),
-            ("claude_compression_ratio".to_string(), toml::Value::Float(self.claude_compression_ratio as f64)),
-            ("tui_theme".to_string(), toml::Value::String(self.tui_theme.clone())),
-            ("tui_pipeline_panel".to_string(), toml::Value::Boolean(self.tui_pipeline_panel)),
+            (
+                "gateway_port".to_string(),
+                toml::Value::Integer(self.gateway_port as i64),
+            ),
+            (
+                "llama_port".to_string(),
+                toml::Value::Integer(self.llama_port as i64),
+            ),
+            (
+                "backend_url".to_string(),
+                toml::Value::String(self.backend_url.clone()),
+            ),
+            (
+                "backend_model".to_string(),
+                toml::Value::String(self.backend_model.clone()),
+            ),
+            (
+                "human_gate".to_string(),
+                toml::Value::Boolean(self.human_gate_enabled),
+            ),
+            (
+                "claude_enabled".to_string(),
+                toml::Value::Boolean(self.claude_enabled),
+            ),
+            (
+                "claude_model".to_string(),
+                toml::Value::String(self.claude_model.clone()),
+            ),
+            (
+                "claude_compression_ratio".to_string(),
+                toml::Value::Float(self.claude_compression_ratio as f64),
+            ),
+            (
+                "tui_theme".to_string(),
+                toml::Value::String(self.tui_theme.clone()),
+            ),
+            (
+                "tui_pipeline_panel".to_string(),
+                toml::Value::Boolean(self.tui_pipeline_panel),
+            ),
         ]);
         let content = toml::to_string_pretty(&toml::Value::Table(table)).unwrap_or_default();
         tokio::fs::write(&path, content).await?;

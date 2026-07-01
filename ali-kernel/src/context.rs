@@ -46,14 +46,8 @@ pub async fn assemble(
     // Phase 2: Inject intent context (limbic — what we're working toward)
     if let Some(ctx) = intent_store.get_context().await {
         system_content.push_str("\n\n## Current Goal");
-        system_content.push_str(&format!(
-            "\nIntent state: {}",
-            ctx.state
-        ));
-        system_content.push_str(&format!(
-            "\nGoal: {}",
-            ctx.goal
-        ));
+        system_content.push_str(&format!("\nIntent state: {}", ctx.state));
+        system_content.push_str(&format!("\nGoal: {}", ctx.goal));
         if ctx.attempt_count > 0 {
             system_content.push_str(&format!(
                 "\nAttempts so far: {} (blocked: {})",

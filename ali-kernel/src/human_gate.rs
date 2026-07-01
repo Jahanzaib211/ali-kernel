@@ -33,7 +33,9 @@ pub struct ApprovalResponse {
 
 #[derive(Debug, Clone)]
 pub enum ApprovalResult {
-    Approved { modified_args: Option<serde_json::Value> },
+    Approved {
+        modified_args: Option<serde_json::Value>,
+    },
     Denied,
 }
 

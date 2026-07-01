@@ -67,11 +67,7 @@ impl GatewayClient {
             "max_tokens": 2048,
         });
 
-        let resp = self.client
-            .post(&url)
-            .json(&body)
-            .send()
-            .await?;
+        let resp = self.client.post(&url).json(&body).send().await?;
 
         let stream = resp.bytes_stream();
         tokio::pin!(stream);
@@ -97,10 +93,12 @@ impl GatewayClient {
                             // Try to parse. If incomplete JSON (more data coming), buffer it.
                             match serde_json::from_str::<Value>(data) {
                                 Ok(v) => {
-                                    if let Some(delta) = v.pointer("/choices/0/delta/content")
+                                    if let Some(delta) = v
+                                        .pointer("/choices/0/delta/content")
                                         .and_then(|c| c.as_str())
                                     {
-                                        let _ = tx.send(GatewayEvent::Token(delta.to_string())).await;
+                                        let _ =
+                                            tx.send(GatewayEvent::Token(delta.to_string())).await;
                                     }
                                 }
                                 Err(_) => {
