@@ -102,8 +102,8 @@ source $HOME/.cargo/env
 ## Installation
 
 ```bash
-git clone https://github.com/Jahanzaib211/ornith-sovereign-gateway
-cd ornith-sovereign-gateway
+git clone https://github.com/Jahanzaib211/ali-kernel
+cd ali-kernel
 
 # Configure environment
 cp .env.example .env
