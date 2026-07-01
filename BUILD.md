@@ -47,15 +47,23 @@ a **sovereign compressing proxy for any model — including the orchestrator its
         ┌──────────────  ALI KERNEL  ──────────────┐
         │            shared engine: compress.rs         │
         └──────────────────────┬────────────────────────┘
-                              │  Anthropic face : /v1/messages  (TO BUILD)
+                              │  Anthropic face : /v1/messages  (LIVE)
   Claude Code  ───────────────┘  (compress request, forward to api.anthropic.com, stream back)
 ```
 
-- **Today:** L5.5 compresses tool observations before they re-enter the local model (verified ~84%
-  reduction on a 51 KB file → fit in the ~12K window).
-- **Next (this idea):** add an **Anthropic-Messages proxy face** so Claude Code can route through the
-  gateway (`ANTHROPIC_BASE_URL=<gateway>`); the same `compress.rs` shrinks *Claude's* context too.
-  Result: **one gateway compresses Ornith and Claude simultaneously**, and headroom is no longer needed.
+- **Done (2026-07-01):** `src/anthropic_proxy.rs` implements the Anthropic-Messages proxy face.
+  Claude Code routes through the gateway via `ANTHROPIC_BASE_URL=http://127.0.0.1:9000`; auth
+  passthrough (the caller's `x-api-key`/`Authorization` forwarded unchanged, never stored/logged);
+  system prompt + oversized messages compressed via the same `compress.rs` used for Ornith. Verified
+  live: a 410 KB system prompt (CLAUDE.md + tool schemas, sent every turn) compresses to ~326 KB
+  (-21%) before it reaches `api.anthropic.com`. Proof lives in `logs/gateway.log` (grep
+  `[claude-proxy]`) — see `COMPRESSION.md` and the `ali-compression-proof` skill/`scripts/compression_proof.py`.
+  **One gateway now compresses Ornith and Claude simultaneously**; headroom is no longer needed.
+- **Also done:** gateway bind hardened to `127.0.0.1`-only (was `0.0.0.0`, network-exposed) to match
+  the sovereign/local-only invariant. Ali TUI's Kernel panel now surfaces the L5.5 compression line
+  live (it was already parsing it from the log, just never rendering it).
+- **Earlier (tool observations):** L5.5 compresses tool observations before they re-enter the local
+  model (verified ~84% reduction on a 51 KB file → fit in the ~12K window).
 
 This is the literal expression of the project thesis: *the gateway is the product; every model — local or
 frontier, engine or orchestrator — sits behind the same sovereign capabilities.*

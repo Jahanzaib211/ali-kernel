@@ -87,8 +87,10 @@ implement lean in-gateway (sovereignty / single-binary), do **not** adopt the fu
   correction notes feeding the RLAIF/DPO loop.
 - _Optional later_: headroom's Rust core for the trained prose compressor; or run headroom as a Claude
   Code wrapper to cut the orchestrator's own token spend (their tool supports Claude Code directly).
-- **Gateway-as-compressing-proxy (the unification):** add an **Anthropic-Messages face** (`/v1/messages`
-  → `api.anthropic.com`, auth passthrough) sharing `compress.rs`, so Claude Code can route through the
-  gateway (`ANTHROPIC_BASE_URL=<gateway>`). Then **one sovereign gateway compresses both Ornith and Claude
-  simultaneously** and headroom is no longer needed at all. See `BUILD.md`. Pairs with the existing
-  pluggable backend + L5.5; only the Anthropic schema/streaming/auth face is new.
+- **Gateway-as-compressing-proxy (the unification) — ✅ done 2026-07-01:** `/v1/messages` proxy face
+  (`src/anthropic_proxy.rs`) forwards to `api.anthropic.com` with auth passthrough, sharing
+  `compress.rs`. Claude Code routes through the gateway via `ANTHROPIC_BASE_URL=http://127.0.0.1:9000`
+  (set in `~/.bashrc`, survives reboot). Verified live: -21% on a 410 KB system prompt. **One sovereign
+  gateway now compresses both Ornith and Claude simultaneously**; headroom is no longer needed. See
+  `BUILD.md` and `COMPRESSION.md`. Proof/check: `ali-compression-proof` skill or
+  `python3 scripts/compression_proof.py`.

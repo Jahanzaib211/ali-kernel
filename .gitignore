@@ -8,7 +8,8 @@ logs/
 training/
 evals/eval_scores.jsonl
 ornith-generated/
-.claude/
+.claude/*
+!.claude/skills/
 
 # python
 __pycache__/

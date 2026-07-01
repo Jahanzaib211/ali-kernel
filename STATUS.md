@@ -1,10 +1,27 @@
 # Ali Kernel — Live Status
 
-_Last updated: 2026-06-30 (session: stand-up + dogfood + RLAIF flywheel)_
+_Last updated: 2026-07-01 (session: Anthropic proxy face + compression proof)_
 
 This is the plain-English status of the build: what runs, how the local model actually
 behaves, and what's next. The full engineering roadmap lives in the plan file
 (`~/.claude/plans/…ornith-sov…md`); this page is the human-readable summary.
+
+## 2026-07-01 update
+
+- **Gateway now compresses Claude Code's own traffic**, not just Ornith's. New `/v1/messages`
+  proxy face (`src/anthropic_proxy.rs`) forwards to `api.anthropic.com` with auth passthrough,
+  shrinking the system prompt / big messages via the existing `compress.rs`. Enabled by
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:9000` (set in `~/.bashrc` — persists across reboots).
+  Verified live: 410 KB system prompt → ~326 KB (-21%).
+- **Security fix:** gateway was bound to `0.0.0.0:9000` (network-exposed); now `127.0.0.1`-only.
+- **Proof, not vibes:** the model can't see the proxy layer, so "is it working" must be checked
+  against `logs/gateway.log`, never asked of the model. Two ways to check:
+  - Ask any Claude Code session in this repo (triggers the `ali-compression-proof` skill), or run
+    `python3 scripts/compression_proof.py` directly.
+  - Live tail: `tail -f logs/gateway.log | grep --line-buffered "L5.5 compressed"`
+- **Ali TUI** now shows the live compression line in its Kernel panel (was already parsed from the
+  log, just never rendered).
+- See `COMPRESSION.md` for the full plain-English writeup.
 
 ---
 
