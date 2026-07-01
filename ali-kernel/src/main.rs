@@ -15,6 +15,7 @@ use tower_http::cors::CorsLayer;
 use tracing::info;
 use uuid::Uuid;
 
+mod anthropic_proxy;
 mod brain;
 mod compress;
 mod config;
@@ -115,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_handler))
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_handler))
+        .route("/v1/messages", post(anthropic_proxy::messages_handler))
         .route("/v1/approvals", post(approval_handler))
         .route("/v1/approvals/:request_id", get(approval_status_handler))
         .route("/benchmark", get(benchmark_handler))
@@ -123,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = format!("0.0.0.0:{}", config.gateway_port);
+    let addr = format!("127.0.0.1:{}", config.gateway_port);
     info!("Ali Kernel listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

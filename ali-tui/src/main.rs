@@ -115,6 +115,7 @@ fn render_pipeline(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     let critique_str = if critique { "yes" } else { "no" };
     let critique_color = if critique { t.success } else { t.muted };
     let tokens = app.pipeline.l9_tokens.clone().unwrap_or_else(|| dash.to_string());
+    let compression = app.pipeline.l5_5_compression.clone().unwrap_or_else(|| dash.to_string());
 
     // System info block
     let sys_lines = vec![
@@ -124,6 +125,7 @@ fn render_pipeline(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Line::from(vec![Span::raw(" memories: ").dim(), Span::raw(&memories).fg(t.accent)]),
         Line::from(vec![Span::raw(" messages: ").dim(), Span::raw(&messages).fg(t.accent)]),
         Line::from(vec![Span::raw(" tokens:   ").dim(), Span::raw(&tokens).fg(t.accent2)]),
+        Line::from(vec![Span::raw(" compress: ").dim(), Span::raw(&compression).fg(t.accent2)]),
     ];
 
     let sys_block = Paragraph::new(sys_lines)
