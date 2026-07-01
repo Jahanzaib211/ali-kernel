@@ -1,0 +1,15 @@
+[Unit]
+Description=llama.cpp server (Ornith-1.0-9B backend for Ali Kernel)
+After=network.target
+
+[Service]
+Type=simple
+User=jahanzaib
+ExecStart=/home/jahanzaib/llama.cpp/build/bin/llama-server --port 8081 -ngl 99 --jinja -c 16384 --cache-ram 4096 --host 127.0.0.1 -m /home/jahanzaib/ornith-1.0-9b-Q4_K_M.gguf
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

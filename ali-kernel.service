@@ -1,6 +1,7 @@
 [Unit]
 Description=Ali Kernel
-After=network.target
+After=network.target llama-server.service
+Wants=llama-server.service
 
 [Service]
 Type=simple
