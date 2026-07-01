@@ -158,7 +158,7 @@ impl Default for TuiConfig {
     fn default() -> Self {
         Self {
             gateway_port: 9000,
-            gateway_host: "0.0.0.0".into(),
+            gateway_host: "127.0.0.1".into(),
             human_gate_enabled: false,
             llama_port: 8081,
             backend_url: "http://127.0.0.1:8081/v1".into(),

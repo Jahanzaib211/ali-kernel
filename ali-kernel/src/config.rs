@@ -165,7 +165,7 @@ pub struct AliConfig {
 }
 
 fn default_gateway_host() -> String {
-    "0.0.0.0".into()
+    "127.0.0.1".into()
 }
 fn default_human_gate_timeout() -> u64 {
     300
