@@ -139,11 +139,7 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
         let content =
             crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
         if content.len() < raw.len() {
-            tracing::info!(
-                "PIPE L5.5 {name} {}→{} chars",
-                raw.len(),
-                content.len()
-            );
+            tracing::info!("PIPE L5.5 {name} {}→{} chars", raw.len(), content.len());
         }
 
         results.push(json!({
@@ -153,7 +149,11 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
             "content": content
         }));
 
-        tracing::info!("PIPE L7 tool_executed name={} chars={}", name, content.len());
+        tracing::info!(
+            "PIPE L7 tool_executed name={} chars={}",
+            name,
+            content.len()
+        );
     }
 
     // Inject tool results into response for caller to handle agentic loop
@@ -173,17 +173,23 @@ pub async fn dispatch_single_tool(name: &str, args: &Value, config: &Config) -> 
             sandbox_exec(cmd).await
         }
         "read_file" => {
-            let path = arg_path(args).ok_or_else(|| anyhow::anyhow!("missing path"))?;
-            Ok(std::fs::read_to_string(path).unwrap_or_else(|e| format!("read error: {e}")))
+            let raw = arg_path(args).ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            let path = config.resolve_tool_path(raw)?;
+            Ok(std::fs::read_to_string(&path).unwrap_or_else(|e| format!("read error: {e}")))
         }
         "write_file" => {
-            let path = arg_path(args).ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            let raw = arg_path(args).ok_or_else(|| anyhow::anyhow!("missing path"))?;
+            let path = config.resolve_tool_path(raw)?;
             let content = args
                 .get("content")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing content"))?;
-            std::fs::write(path, content)?;
-            Ok(format!("written {} bytes to {path}", content.len()))
+            std::fs::write(&path, content)?;
+            Ok(format!(
+                "written {} bytes to {}",
+                content.len(),
+                path.display()
+            ))
         }
         // Crate-aware Rust engineering: let the model explore the real ecosystem.
         "crate_search" => {

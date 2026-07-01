@@ -11,7 +11,6 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio_stream::StreamExt;
-use tower_http::cors::CorsLayer;
 use tracing::info;
 use uuid::Uuid;
 
@@ -22,8 +21,8 @@ mod config;
 mod context;
 mod critique;
 mod devloop;
-mod events;
 mod evals;
+mod events;
 mod human_gate;
 mod identity;
 mod intent;
@@ -122,7 +121,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/benchmark", get(benchmark_handler))
         .route("/eval", get(eval_handler))
         .route("/feedback", post(feedback_handler))
-        .layer(CorsLayer::permissive())
         .with_state(state);
 
     let addr = format!("127.0.0.1:{}", config.gateway_port);
@@ -213,9 +211,16 @@ async fn chat_handler(
     let session_name = format!(
         "{}_{}",
         chrono::Utc::now().format("%Y-%m-%d"),
-        last_user_msg.split_whitespace().take(3).collect::<Vec<_>>().join("-")
+        last_user_msg
+            .split_whitespace()
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("-")
     );
-    state.journal.begin_session(session_name.clone(), last_user_msg.to_string()).await;
+    state
+        .journal
+        .begin_session(session_name.clone(), last_user_msg.to_string())
+        .await;
 
     let routing = router::classify(last_user_msg);
     let final_temp = temperature.unwrap_or(routing.temperature);
@@ -350,9 +355,14 @@ async fn chat_handler(
             memory::store(&state.config, &user_prompt, &final_content).await;
 
             // Nervous system: End journal session (hippocampus)
-            let _entry = state.journal.end_session(
-                if tool_called { journal::EmotionalTone::Focused } else { journal::EmotionalTone::Neutral }
-            ).await;
+            let _entry = state
+                .journal
+                .end_session(if tool_called {
+                    journal::EmotionalTone::Focused
+                } else {
+                    journal::EmotionalTone::Neutral
+                })
+                .await;
 
             // Nervous system: End intent session (limbic)
             state.intent.on_session_end(tool_called).await;
@@ -449,7 +459,10 @@ async fn run_agentic_loop(
             let pending_tools = human_gate::extract_tool_calls(&response);
             if !pending_tools.is_empty() {
                 // Register pending approval
-                state.human_gate.register(request_id.clone(), pending_tools.clone()).await;
+                state
+                    .human_gate
+                    .register(request_id.clone(), pending_tools.clone())
+                    .await;
 
                 // Log the pending event
                 for tool in &pending_tools {
@@ -484,26 +497,28 @@ async fn run_agentic_loop(
                         Some(human_gate::ApprovalResult::Approved { modified_args }) => {
                             // Execute the approved tool with original or modified args
                             let args = modified_args.unwrap_or_else(|| tool.args.clone());
-                            let result = tools::dispatch_single_tool(
-                                &tool.tool_name,
-                                &args,
-                                &state.config,
-                            )
-                            .await;
+                            let result =
+                                tools::dispatch_single_tool(&tool.tool_name, &args, &state.config)
+                                    .await;
                             let success = result.is_ok();
                             let raw = match result {
                                 Ok(output) => output,
                                 Err(e) => format!("Tool error: {e}"),
                             };
-                            let compressed =
-                                crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
+                            let compressed = crate::compress::compress_observation(
+                                &raw,
+                                crate::compress::DEFAULT_OBS_BUDGET,
+                            );
 
                             // Nervous system: record tool in journal
-                            state.journal.record_tool(
-                                tool.tool_name.clone(),
-                                success,
-                                raw.chars().take(200).collect(),
-                            ).await;
+                            state
+                                .journal
+                                .record_tool(
+                                    tool.tool_name.clone(),
+                                    success,
+                                    raw.chars().take(200).collect(),
+                                )
+                                .await;
                             state.journal.record_file(tool.tool_name.clone()).await;
 
                             results.push(json!({
@@ -512,7 +527,11 @@ async fn run_agentic_loop(
                                 "name": tool.tool_name,
                                 "content": compressed
                             }));
-                            tracing::info!("PIPE L7 human_gate_approved tool={} request_id={}", tool.tool_name, request_id);
+                            tracing::info!(
+                                "PIPE L7 human_gate_approved tool={} request_id={}",
+                                tool.tool_name,
+                                request_id
+                            );
                         }
                         Some(human_gate::ApprovalResult::Denied) | None => {
                             // Return denial as tool error result
@@ -522,7 +541,11 @@ async fn run_agentic_loop(
                                 "name": tool.tool_name,
                                 "content": format!("Tool `{}` execution denied by user.", tool.tool_name)
                             }));
-                            tracing::info!("PIPE L7 human_gate_denied tool={} request_id={}", tool.tool_name, request_id);
+                            tracing::info!(
+                                "PIPE L7 human_gate_denied tool={} request_id={}",
+                                tool.tool_name,
+                                request_id
+                            );
                         }
                     }
                 }
@@ -561,15 +584,29 @@ async fn run_agentic_loop(
             .unwrap_or_default();
 
         // Nervous system: update intent state after tool round
-        if let Some(ref r) = results.first() {
+        if let Some(r) = results.first() {
             let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = r.get("content").and_then(|c| c.as_str()).unwrap_or("");
-            let success = !r.get("content").and_then(|c| c.as_str()).map(|s| s.starts_with("Tool error")).unwrap_or(false);
+            let success = !r
+                .get("content")
+                .and_then(|c| c.as_str())
+                .map(|s| s.starts_with("Tool error"))
+                .unwrap_or(false);
             state.intent.on_tool_round(name, args, success).await;
             if !success {
-                state.journal.record_frustration(format!("tool {} failed: {}", name, &args[..args.len().min(100)])).await;
+                state
+                    .journal
+                    .record_frustration(format!(
+                        "tool {} failed: {}",
+                        name,
+                        &args[..args.len().min(100)]
+                    ))
+                    .await;
             } else {
-                state.journal.record_win(format!("tool {} succeeded", name)).await;
+                state
+                    .journal
+                    .record_win(format!("tool {} succeeded", name))
+                    .await;
             }
         }
 
@@ -600,14 +637,14 @@ async fn run_agentic_loop(
     (response, tool_called, normalized)
 }
 
-async fn approval_handler(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Response {
+async fn approval_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let request_id = match body.get("request_id").and_then(|v| v.as_str()) {
         Some(id) => id.to_string(),
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "request_id required"})))
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "request_id required"})),
+            )
                 .into_response();
         }
     };
@@ -615,7 +652,10 @@ async fn approval_handler(
     let action = match body.get("action").and_then(|v| v.as_str()) {
         Some(a) => a,
         None => {
-            return (StatusCode::BAD_REQUEST, Json(json!({"error": "action required"})))
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "action required"})),
+            )
                 .into_response();
         }
     };
@@ -629,19 +669,27 @@ async fn approval_handler(
         "approve" => {
             let modified_args = body.get("modification").cloned();
             if let Some(idx) = tool_index {
-                match state.human_gate.approve(&request_id, idx, modified_args).await {
+                match state
+                    .human_gate
+                    .approve(&request_id, idx, modified_args)
+                    .await
+                {
                     Some(_) => {
                         tracing::info!("HG approve: request_id={} tool_index={}", request_id, idx);
                         Json(json!({"status": "ok", "request_id": request_id, "executed": true, "denied": false}))
                             .into_response()
                     }
-                    None => {
-                        (StatusCode::NOT_FOUND, Json(json!({"error": "pending approval not found"})))
-                            .into_response()
-                    }
+                    None => (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "pending approval not found"})),
+                    )
+                        .into_response(),
                 }
             } else {
-                (StatusCode::BAD_REQUEST, Json(json!({"error": "tool_index required for approve"})))
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "tool_index required for approve"})),
+                )
                     .into_response()
             }
         }
@@ -653,20 +701,25 @@ async fn approval_handler(
                         Json(json!({"status": "ok", "request_id": request_id, "executed": false, "denied": true}))
                             .into_response()
                     }
-                    None => {
-                        (StatusCode::NOT_FOUND, Json(json!({"error": "pending approval not found"})))
-                            .into_response()
-                    }
+                    None => (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({"error": "pending approval not found"})),
+                    )
+                        .into_response(),
                 }
             } else {
-                (StatusCode::BAD_REQUEST, Json(json!({"error": "tool_index required for deny"})))
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "tool_index required for deny"})),
+                )
                     .into_response()
             }
         }
-        _ => {
-            (StatusCode::BAD_REQUEST, Json(json!({"error": "action must be 'approve' or 'deny'"})))
-                .into_response()
-        }
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "action must be 'approve' or 'deny'"})),
+        )
+            .into_response(),
     }
 }
 

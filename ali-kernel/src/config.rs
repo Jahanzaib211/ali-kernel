@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use figment::{
     providers::{Env, Format, Serialized, Toml},
     Figment,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -508,7 +508,77 @@ impl AliConfig {
             config.evals_dir = config.ali_dir.join(&config.evals_dir);
         }
 
+        // read_file/write_file tool calls are confined to these roots (see
+        // resolve_tool_path below). An empty list would mean "no file tool
+        // access at all", so only fill in a default when nothing was
+        // explicitly configured — the launch directory (the project you
+        // started the gateway in), the dev-loop workspace, and the ali state
+        // dir. Override with `allowed_workspace_paths` in .ali.toml/config.toml
+        // for a stricter or different set of roots.
+        if config.allowed_workspace_paths.is_empty() {
+            if let Ok(cwd) = std::env::current_dir() {
+                config.allowed_workspace_paths.push(cwd);
+            }
+            config
+                .allowed_workspace_paths
+                .push(config.workspace_dir.clone());
+            config.allowed_workspace_paths.push(config.ali_dir.clone());
+        }
+
         Ok(config)
+    }
+
+    /// Confine a model-supplied path to `allowed_workspace_paths`. Walks up to the
+    /// nearest existing ancestor to canonicalize (resolving `..`/symlinks) even for
+    /// paths that don't exist yet (write_file creating a new file), then checks the
+    /// resolved path sits under one of the allowed roots. This is the only thing
+    /// standing between a tool call and reading/writing arbitrary files (~/.ssh,
+    /// /etc/shadow, the attestation hash store) with the gateway's own permissions —
+    /// see security review 2026-07-02.
+    pub fn resolve_tool_path(&self, raw: &str) -> Result<PathBuf> {
+        let requested = PathBuf::from(raw);
+        let mut existing = requested.clone();
+        let mut tail = PathBuf::new();
+
+        loop {
+            let probe = if existing.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                existing.as_path()
+            };
+            match probe.canonicalize() {
+                Ok(canon) => {
+                    let resolved = if tail.as_os_str().is_empty() {
+                        canon
+                    } else {
+                        canon.join(&tail)
+                    };
+                    let allowed = self.allowed_workspace_paths.iter().any(|root| {
+                        root.canonicalize()
+                            .map(|r| resolved.starts_with(&r))
+                            .unwrap_or(false)
+                    });
+                    if !allowed {
+                        return Err(anyhow!(
+                            "path '{raw}' is outside the allowed workspace roots"
+                        ));
+                    }
+                    return Ok(resolved);
+                }
+                Err(_) => {
+                    let Some(parent) = probe.parent() else {
+                        return Err(anyhow!("no such directory for path '{raw}'"));
+                    };
+                    let name = probe.file_name().map(PathBuf::from).unwrap_or_default();
+                    tail = if tail.as_os_str().is_empty() {
+                        name
+                    } else {
+                        name.join(&tail)
+                    };
+                    existing = parent.to_path_buf();
+                }
+            }
+        }
     }
 
     fn user_config_path() -> PathBuf {
@@ -703,3 +773,73 @@ impl Default for AliConfig {
 
 /// Backward-compat type alias — all internal modules use `Config`
 pub type Config = AliConfig;
+
+#[cfg(test)]
+mod resolve_tool_path_tests {
+    use super::*;
+
+    fn test_config(root: &Path) -> AliConfig {
+        AliConfig {
+            allowed_workspace_paths: vec![root.to_path_buf()],
+            ..AliConfig::default()
+        }
+    }
+
+    #[test]
+    fn allows_existing_file_inside_root() {
+        let root = std::env::temp_dir().join("ali-test-allow-existing");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("ok.txt");
+        std::fs::write(&file, "hi").unwrap();
+
+        let cfg = test_config(&root);
+        let resolved = cfg.resolve_tool_path(file.to_str().unwrap()).unwrap();
+        assert!(resolved.starts_with(root.canonicalize().unwrap()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn allows_new_file_inside_root() {
+        let root = std::env::temp_dir().join("ali-test-allow-new");
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("new.txt"); // does not exist yet — write_file case
+
+        let cfg = test_config(&root);
+        let resolved = cfg.resolve_tool_path(file.to_str().unwrap()).unwrap();
+        assert!(resolved.starts_with(root.canonicalize().unwrap()));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rejects_dotdot_traversal_outside_root() {
+        let root = std::env::temp_dir().join("ali-test-reject-traversal");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let cfg = test_config(&root);
+        let escape = root.join("../../../../../../etc/passwd");
+        let result = cfg.resolve_tool_path(escape.to_str().unwrap());
+        assert!(
+            result.is_err(),
+            "traversal outside the allowed root must be rejected"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn rejects_absolute_path_outside_root() {
+        let root = std::env::temp_dir().join("ali-test-reject-absolute");
+        std::fs::create_dir_all(&root).unwrap();
+
+        let cfg = test_config(&root);
+        let result = cfg.resolve_tool_path("/etc/passwd");
+        assert!(
+            result.is_err(),
+            "absolute path outside the allowed root must be rejected"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
