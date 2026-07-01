@@ -1,8 +1,8 @@
-/// Anthropic Messages API proxy — L5.5 compresses context before forwarding to
-/// api.anthropic.com. Point Claude Code at the gateway with:
-///   export ANTHROPIC_BASE_URL=http://127.0.0.1:9000
-/// Auth passthrough: the caller's x-api-key or Authorization header is forwarded
-/// unchanged; the gateway never stores or logs the key.
+//! Anthropic Messages API proxy — L5.5 compresses context before forwarding to
+//! api.anthropic.com. Point Claude Code at the gateway with:
+//!   export ANTHROPIC_BASE_URL=http://127.0.0.1:9000
+//! Auth passthrough: the caller's x-api-key or Authorization header is forwarded
+//! unchanged; the gateway never stores or logs the key.
 
 use axum::{
     body::Body,
@@ -32,7 +32,10 @@ pub async fn messages_handler(
         .map(|s| s.to_string());
 
     let Some(auth_value) = api_key else {
-        return error_response(StatusCode::UNAUTHORIZED, "missing x-api-key or Authorization header");
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "missing x-api-key or Authorization header",
+        );
     };
 
     // Measure context before compression
@@ -45,7 +48,11 @@ pub async fn messages_handler(
     compress_messages(&mut body);
 
     let after = serialized_size(&body);
-    let pct = if before > 0 { 100u64.saturating_sub((after * 100 / before) as u64) } else { 0 };
+    let pct = after
+        .checked_mul(100)
+        .and_then(|v| v.checked_div(before))
+        .map(|v| 100u64.saturating_sub(v as u64))
+        .unwrap_or(0);
     info!(
         "PIPE L5.5 compressed: {} → {} chars (-{}%) [claude-proxy]",
         before, after, pct
@@ -101,9 +108,9 @@ pub async fn messages_handler(
     }
 
     let stream = upstream.bytes_stream();
-    builder.body(Body::from_stream(stream)).unwrap_or_else(|_| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, "body build failed")
-    })
+    builder
+        .body(Body::from_stream(stream))
+        .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "body build failed"))
 }
 
 fn compress_system(body: &mut Value) {

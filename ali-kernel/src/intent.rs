@@ -90,6 +90,7 @@ pub struct IntentContext {
     pub goal: String,
     pub attempt_count: usize,
     pub last_blocked_by: Option<String>,
+    #[allow(dead_code)] // reserved for cross-session recall UI, not read yet
     pub history_len: usize,
 }
 
@@ -139,8 +140,10 @@ pub struct Intent {
     /// Current active intent
     active: Arc<RwLock<Option<IntentRecord>>>,
     /// Recent resolved intents (for cross-session recall)
+    #[allow(dead_code)] // reserved for cross-session recall, not read yet
     recent: Arc<RwLock<VecDeque<IntentRecord>>>,
     /// Max recent intents to keep in memory
+    #[allow(dead_code)] // reserved for cross-session recall, not read yet
     max_recent: usize,
 }
 
@@ -166,7 +169,15 @@ impl Intent {
             if let Ok(intent) = serde_json::from_str::<IntentRecord>(line) {
                 if intent.state != IntentState::Achieved && intent.state != IntentState::Abandoned {
                     *self.active.write().await = Some(intent);
-                    tracing::info!("INTENT restored goal={}", self.active.read().await.as_ref().map(|i| i.goal.as_str()).unwrap_or(""));
+                    tracing::info!(
+                        "INTENT restored goal={}",
+                        self.active
+                            .read()
+                            .await
+                            .as_ref()
+                            .map(|i| i.goal.as_str())
+                            .unwrap_or("")
+                    );
                     return Ok(());
                 }
             }
@@ -181,17 +192,38 @@ impl Intent {
 
         // Resume patterns — pick up a previous thread
         let resume_patterns = [
-            "continue", "keep going", "pick up", "carry on",
-            "again", "more", "still", "another",
+            "continue",
+            "keep going",
+            "pick up",
+            "carry on",
+            "again",
+            "more",
+            "still",
+            "another",
         ];
         let is_resume = resume_patterns.iter().any(|p| msg_lower.contains(p));
 
         // Goal-statement patterns
         let goal_patterns = [
-            "i want", "i need", "let's", "add", "build", "create",
-            "implement", "fix", "change", "update", "migrate", "refactor",
-            "write", "make", "set up", "configure", "help me",
-            "can you", "please",
+            "i want",
+            "i need",
+            "let's",
+            "add",
+            "build",
+            "create",
+            "implement",
+            "fix",
+            "change",
+            "update",
+            "migrate",
+            "refactor",
+            "write",
+            "make",
+            "set up",
+            "configure",
+            "help me",
+            "can you",
+            "please",
         ];
         let is_goal_statement = goal_patterns.iter().any(|p| msg_lower.contains(p));
 
@@ -201,15 +233,27 @@ impl Intent {
 
         // Achievement patterns
         let achieve_patterns = [
-            "perfect", "that works", "thanks", "done", "great",
-            "exactly", "awesome", "nice", "good", "worked",
+            "perfect",
+            "that works",
+            "thanks",
+            "done",
+            "great",
+            "exactly",
+            "awesome",
+            "nice",
+            "good",
+            "worked",
         ];
         let is_achieve = achieve_patterns.iter().any(|p| msg_lower.contains(p));
 
         let mut guard = self.active.write().await;
 
         // Determine what action to take based on current state
-        enum Action { None, Resume, Abandon, Achieve, NewGoal, SubGoal }
+        enum Action {
+            None,
+            Abandon,
+            Achieve,
+        }
         let mut action = Action::None;
         let mut new_intent_activated = false;
 
@@ -222,9 +266,15 @@ impl Intent {
         }
 
         {
-            let current = (&mut *guard).as_mut();
+            let current = guard.as_mut();
 
-            match (current, is_resume, is_goal_statement, is_abandon, is_achieve) {
+            match (
+                current,
+                is_resume,
+                is_goal_statement,
+                is_abandon,
+                is_achieve,
+            ) {
                 // Resume
                 (Some(ref mut intent), true, _, _, _) if intent.state != IntentState::Dormant => {
                     let was = intent.state;
@@ -251,8 +301,6 @@ impl Intent {
             }
         } // inner borrow ends here
 
-
-
         // Handle actions that need async operations (outside the borrow)
         match action {
             Action::Abandon => {
@@ -273,8 +321,7 @@ impl Intent {
     pub async fn on_tool_round(&self, tool_name: &str, tool_args: &str, tool_success: bool) {
         let mut guard = self.active.write().await;
         {
-            let inner = (&mut *guard);
-            if let Some(ref mut intent) = inner.as_mut() {
+            if let Some(intent) = guard.as_mut() {
                 intent.attempt_count += 1;
 
                 if !tool_success {
@@ -290,14 +337,20 @@ impl Intent {
                     }
 
                     if intent.consecutive_blocks >= 3 {
-                        intent.transition_to(IntentState::Blocked, format!("same tool blocked 3x: {}", tool_name));
+                        intent.transition_to(
+                            IntentState::Blocked,
+                            format!("same tool blocked 3x: {}", tool_name),
+                        );
                         tracing::warn!("INTENT blocked goal={}", intent.goal);
                     }
                 } else {
                     intent.consecutive_blocks = 0;
                     intent.last_blocked_by = None;
                     if intent.state == IntentState::Blocked {
-                        intent.transition_to(IntentState::Pursuing, "tool succeeded after block".into());
+                        intent.transition_to(
+                            IntentState::Pursuing,
+                            "tool succeeded after block".into(),
+                        );
                     } else if intent.state == IntentState::Active {
                         intent.transition_to(IntentState::Pursuing, "tool round succeeded".into());
                     }
@@ -310,13 +363,13 @@ impl Intent {
     pub async fn on_session_end(&self, had_success: bool) {
         let mut guard = self.active.write().await;
         {
-            let inner = (&mut *guard);
-            if let Some(ref mut intent) = inner.as_mut() {
+            if let Some(intent) = guard.as_mut() {
                 if had_success && intent.state == IntentState::Pursuing {
-                    intent.transition_to(IntentState::Achieved, "session ended with success".into());
+                    intent
+                        .transition_to(IntentState::Achieved, "session ended with success".into());
                     tracing::info!("INTENT achieved at session end goal={}", intent.goal);
                 }
-                if let Err(e) = self.persist(&intent) {
+                if let Err(e) = self.persist(intent) {
                     tracing::error!("INTENT persist failed: {e}");
                 }
             }
@@ -327,11 +380,10 @@ impl Intent {
     pub async fn achieve(&self, description: &str) {
         let mut guard = self.active.write().await;
         {
-            let inner = (&mut *guard);
-            if let Some(ref mut intent) = inner.as_mut() {
+            if let Some(intent) = guard.as_mut() {
                 intent.transition_to(IntentState::Achieved, description.into());
                 tracing::info!("INTENT achieved goal={}", intent.goal);
-                if let Err(e) = self.persist(&intent) {
+                if let Err(e) = self.persist(intent) {
                     tracing::error!("INTENT persist failed: {e}");
                 }
             }
@@ -342,11 +394,10 @@ impl Intent {
     pub async fn abandon(&self, reason: &str) {
         let mut guard = self.active.write().await;
         {
-            let inner = (&mut *guard);
-            if let Some(ref mut intent) = inner.as_mut() {
+            if let Some(intent) = guard.as_mut() {
                 intent.transition_to(IntentState::Abandoned, reason.into());
                 tracing::info!("INTENT abandoned goal={}", intent.goal);
-                if let Err(e) = self.persist(&intent) {
+                if let Err(e) = self.persist(intent) {
                     tracing::error!("INTENT persist failed: {e}");
                 }
             }
@@ -365,11 +416,13 @@ impl Intent {
     }
 
     /// Get the full active intent record.
+    #[allow(dead_code)] // reserved for an /intent endpoint, not wired up yet
     pub async fn get_active(&self) -> Option<IntentRecord> {
         self.active.read().await.clone()
     }
 
     /// Get recent resolved intents for cross-session context.
+    #[allow(dead_code)] // reserved for an /intent endpoint, not wired up yet
     pub async fn get_recent(&self, limit: usize) -> Vec<IntentRecord> {
         let guard = self.recent.read().await;
         guard.iter().take(limit).cloned().collect()
@@ -377,6 +430,7 @@ impl Intent {
 
     // ── Private ──────────────────────────────────────────────────────────────
 
+    #[allow(dead_code)] // reserved for cross-session recall, not called yet
     async fn push_recent(&self) {
         if let Some(intent) = self.active.write().await.take() {
             let mut r = self.recent.write().await;

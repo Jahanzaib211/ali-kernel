@@ -162,11 +162,13 @@ impl IdentityStore {
     }
 
     /// Get the cached identity (must call load() first).
+    #[allow(dead_code)] // reserved for an /identity endpoint, not wired up yet
     pub async fn get(&self) -> Option<Identity> {
         self.cache.read().await.clone()
     }
 
     /// Get a specific preference value.
+    #[allow(dead_code)] // reserved for /pref, /identity commands, not wired up yet (exercised by tests below)
     pub async fn get_preference(&self, key: &str) -> Option<Preference> {
         let guard = self.cache.read().await;
         if let Some(ref identity) = *guard {
@@ -181,6 +183,7 @@ impl IdentityStore {
     }
 
     /// Set a stated preference (explicit user choice).
+    #[allow(dead_code)] // reserved for /pref, /identity commands, not wired up yet (exercised by tests below)
     pub async fn set_preference(&self, key: String, value: String) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
@@ -194,12 +197,21 @@ impl IdentityStore {
         identity.preferences.stated.insert(key, pref);
         identity.updated_at = chrono::Utc::now();
         self.save_locked(&*identity).await?;
-        tracing::info!("IDENTITY pref set: {} (stated)", identity.preferences.stated.len());
+        tracing::info!(
+            "IDENTITY pref set: {} (stated)",
+            identity.preferences.stated.len()
+        );
         Ok(())
     }
 
     /// Infer a preference from observed behavior.
-    pub async fn infer_preference(&self, key: String, value: String, examples: Vec<String>) -> Result<()> {
+    #[allow(dead_code)] // reserved for /pref, /identity commands, not wired up yet (exercised by tests below)
+    pub async fn infer_preference(
+        &self,
+        key: String,
+        value: String,
+        examples: Vec<String>,
+    ) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
         // Don't overwrite stated preferences
@@ -227,6 +239,7 @@ impl IdentityStore {
     }
 
     /// Correct an inferred preference (user overrides it).
+    #[allow(dead_code)] // reserved for /pref, /identity commands, not wired up yet (exercised by tests below)
     pub async fn correct_preference(&self, key: String, value: String) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
@@ -247,7 +260,13 @@ impl IdentityStore {
     }
 
     /// Add a dealbreaker.
-    pub async fn add_dealbreaker(&self, description: String, reason: String, triggers: Vec<String>) -> Result<()> {
+    #[allow(dead_code)] // reserved for /pref, /identity commands, not wired up yet (exercised by tests below)
+    pub async fn add_dealbreaker(
+        &self,
+        description: String,
+        reason: String,
+        triggers: Vec<String>,
+    ) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
         identity.dealbreakers.push(DealBreaker {
@@ -261,6 +280,7 @@ impl IdentityStore {
     }
 
     /// Add a pattern to a category.
+    #[allow(dead_code)] // reserved for identity-shaping tools, not wired up yet
     pub async fn add_pattern(&self, category: &str, pattern: String) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
@@ -277,6 +297,7 @@ impl IdentityStore {
     }
 
     /// Add a voice sample.
+    #[allow(dead_code)] // reserved for identity-shaping tools, not wired up yet
     pub async fn add_voice_sample(&self, text: String, context: String) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
@@ -295,12 +316,24 @@ impl IdentityStore {
     }
 
     /// Update profile fields.
-    pub async fn update_profile(&self, name: Option<String>, role: Option<String>, timezone: Option<String>) -> Result<()> {
+    #[allow(dead_code)] // reserved for identity-shaping tools, not wired up yet
+    pub async fn update_profile(
+        &self,
+        name: Option<String>,
+        role: Option<String>,
+        timezone: Option<String>,
+    ) -> Result<()> {
         let mut guard = self.cache.write().await;
         let identity = guard.get_or_insert_with(Identity::default);
-        if let Some(n) = name { identity.profile.name = Some(n); }
-        if let Some(r) = role { identity.profile.role = Some(r); }
-        if let Some(tz) = timezone { identity.profile.timezone = Some(tz); }
+        if let Some(n) = name {
+            identity.profile.name = Some(n);
+        }
+        if let Some(r) = role {
+            identity.profile.role = Some(r);
+        }
+        if let Some(tz) = timezone {
+            identity.profile.timezone = Some(tz);
+        }
         identity.updated_at = chrono::Utc::now();
         self.save_locked(&*identity).await?;
         Ok(())
@@ -334,13 +367,21 @@ impl IdentityStore {
 
         // Inferred preferences (medium confidence — only top ones)
         if !identity.preferences.inferred.is_empty() {
-            let top_inferred: Vec<_> = identity.preferences.inferred.iter()
+            let top_inferred: Vec<_> = identity
+                .preferences
+                .inferred
+                .iter()
                 .filter(|(_, p)| p.confidence >= 0.5)
                 .collect();
             if !top_inferred.is_empty() {
                 ctx.push_str("\nYour inferred preferences (you may correct these):\n");
                 for (key, pref) in top_inferred {
-                    ctx.push_str(&format!("  {}: {} (confidence: {:.0}%)\n", key, pref.value, pref.confidence * 100.0));
+                    ctx.push_str(&format!(
+                        "  {}: {} (confidence: {:.0}%)\n",
+                        key,
+                        pref.value,
+                        pref.confidence * 100.0
+                    ));
                 }
             }
         }
@@ -363,10 +404,16 @@ impl IdentityStore {
 
         // Toolkit
         if !identity.toolkit.loves.is_empty() {
-            ctx.push_str(&format!("\nYou prefer: {}\n", identity.toolkit.loves.join(", ")));
+            ctx.push_str(&format!(
+                "\nYou prefer: {}\n",
+                identity.toolkit.loves.join(", ")
+            ));
         }
         if !identity.toolkit.never_uses.is_empty() {
-            ctx.push_str(&format!("You never use: {}\n", identity.toolkit.never_uses.join(", ")));
+            ctx.push_str(&format!(
+                "You never use: {}\n",
+                identity.toolkit.never_uses.join(", ")
+            ));
         }
 
         // Voice (writing style)
@@ -398,8 +445,11 @@ mod tests {
     use super::*;
 
     fn temp_identity() -> IdentityStore {
+        // Unique dir per call — these tests run in parallel and previously
+        // shared one fixed path, racing on the same identity.json file.
+        let dir = std::env::temp_dir().join(format!("ali_identity_test_{}", uuid::Uuid::new_v4()));
         let cfg = crate::config::Config {
-            ali_dir: std::env::temp_dir().join("ali_identity_test"),
+            ali_dir: dir,
             ..Default::default()
         };
         IdentityStore::new(&cfg).unwrap()
@@ -409,7 +459,9 @@ mod tests {
     async fn set_and_get_preference() {
         let id = temp_identity();
         id.load().await.unwrap();
-        id.set_preference("indent".into(), "4 spaces".into()).await.unwrap();
+        id.set_preference("indent".into(), "4 spaces".into())
+            .await
+            .unwrap();
         let pref = id.get_preference("indent").await.unwrap();
         assert_eq!(pref.value, "4 spaces");
         assert_eq!(pref.confidence, 1.0);
@@ -419,8 +471,12 @@ mod tests {
     async fn inferred_does_not_overwrite_stated() {
         let id = temp_identity();
         id.load().await.unwrap();
-        id.set_preference("indent".into(), "2 spaces".into()).await.unwrap();
-        id.infer_preference("indent".into(), "4 spaces".into(), vec![]).await.unwrap();
+        id.set_preference("indent".into(), "2 spaces".into())
+            .await
+            .unwrap();
+        id.infer_preference("indent".into(), "4 spaces".into(), vec![])
+            .await
+            .unwrap();
         let pref = id.get_preference("indent").await.unwrap();
         assert_eq!(pref.value, "2 spaces"); // stated wins
     }
@@ -429,8 +485,16 @@ mod tests {
     async fn correct_preference() {
         let id = temp_identity();
         id.load().await.unwrap();
-        id.infer_preference("style".into(), "functional".into(), vec!["uses iterators".into()]).await.unwrap();
-        id.correct_preference("style".into(), "OO".into()).await.unwrap();
+        id.infer_preference(
+            "style".into(),
+            "functional".into(),
+            vec!["uses iterators".into()],
+        )
+        .await
+        .unwrap();
+        id.correct_preference("style".into(), "OO".into())
+            .await
+            .unwrap();
         let pref = id.get_preference("style").await.unwrap();
         assert_eq!(pref.value, "OO");
         assert_eq!(pref.source, PreferenceSource::Corrected);
@@ -440,8 +504,12 @@ mod tests {
     async fn inject_context_formats_well() {
         let id = temp_identity();
         id.load().await.unwrap();
-        id.set_preference("indent".into(), "4".into()).await.unwrap();
-        id.add_dealbreaker("jQuery".into(), "deprecated".into(), vec!["jquery".into()]).await.unwrap();
+        id.set_preference("indent".into(), "4".into())
+            .await
+            .unwrap();
+        id.add_dealbreaker("jQuery".into(), "deprecated".into(), vec!["jquery".into()])
+            .await
+            .unwrap();
         let ctx = id.inject_context().await;
         assert!(ctx.contains("indent"));
         assert!(ctx.contains("jQuery"));

@@ -12,6 +12,11 @@
 //!   Kernel emits events → WebSocket/Channel → TUI renders live
 //!
 //! All times are UTC ISO-8601 strings.
+//!
+//! Not wired up yet — reserved for the ROADMAP.md Phase 2 telemetry spine
+//! (broadcast + SSE, replacing the current gateway.log PIPE-line tailing).
+
+#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,13 +29,20 @@ pub enum AliEvent {
     /// L3 routing decision
     Route { route: String, temperature: f64 },
     /// L4 memory retrieval completed
-    MemoriesRetrieved { count: usize, sources: Vec<MemorySource> },
+    MemoriesRetrieved {
+        count: usize,
+        sources: Vec<MemorySource>,
+    },
     /// L5 context assembly completed
     ContextAssembled { token_count: usize, budget: usize },
     /// L6 inference started
     InferenceStarted { request_id: String },
     /// L6 inference completed
-    InferenceDone { request_id: String, duration_ms: u64, tokens: u64 },
+    InferenceDone {
+        request_id: String,
+        duration_ms: u64,
+        tokens: u64,
+    },
     /// L8 critique applied
     CritiqueApplied { rewritten: bool },
     /// L9 pipeline complete
@@ -87,13 +99,23 @@ pub enum AliEvent {
         energy_level: String,
     },
     /// Session started
-    SessionStart { session_name: String, intent_summary: String },
+    SessionStart {
+        session_name: String,
+        intent_summary: String,
+    },
     /// Session ended
-    SessionEnd { session_name: String, duration_secs: u64 },
+    SessionEnd {
+        session_name: String,
+        duration_secs: u64,
+    },
 
     // ── Identity / Feedback ───────────────────────────────────────────────
     /// Identity preference observed
-    PreferenceInferred { key: String, value: String, confidence: f32 },
+    PreferenceInferred {
+        key: String,
+        value: String,
+        confidence: f32,
+    },
     /// User gave feedback on a response
     UserFeedback { score: u8, note: Option<String> },
 
@@ -106,9 +128,15 @@ pub enum AliEvent {
         tool_index: usize,
     },
     /// Human gate approved
-    HumanGateApproved { request_id: String, tool_name: String },
+    HumanGateApproved {
+        request_id: String,
+        tool_name: String,
+    },
     /// Human gate denied
-    HumanGateDenied { request_id: String, tool_name: String },
+    HumanGateDenied {
+        request_id: String,
+        tool_name: String,
+    },
     /// Error occurred
     Error { code: String, message: String },
     /// Keepalive/heartbeat
@@ -144,16 +172,27 @@ impl AliEvent {
         if let Some(route) = rest.strip_prefix("L3 route=") {
             let parts: Vec<&str> = route.splitn(2, ' ').collect();
             let route = parts[0].trim().to_string();
-            let temp = parts.get(1).and_then(|s| s.strip_prefix("temp="))
+            let temp = parts
+                .get(1)
+                .and_then(|s| s.strip_prefix("temp="))
                 .and_then(|s| s.parse::<f64>().ok())
                 .unwrap_or(0.6);
-            Some(AliEvent::Route { route, temperature: temp })
+            Some(AliEvent::Route {
+                route,
+                temperature: temp,
+            })
         } else if let Some(n) = rest.strip_prefix("L4 memories=") {
             let count = n.trim().parse::<usize>().unwrap_or(0);
-            Some(AliEvent::MemoriesRetrieved { count, sources: Vec::new() })
+            Some(AliEvent::MemoriesRetrieved {
+                count,
+                sources: Vec::new(),
+            })
         } else if let Some(n) = rest.strip_prefix("L5 messages=") {
             let count = n.trim().parse::<usize>().unwrap_or(0);
-            Some(AliEvent::ContextAssembled { token_count: count, budget: 12000 })
+            Some(AliEvent::ContextAssembled {
+                token_count: count,
+                budget: 12000,
+            })
         } else if let Some(_rest) = rest.strip_prefix("L5.5 ") {
             // Compressed: "L5.5 read_file 1234→456 chars"
             Some(AliEvent::ToolCompressed {
@@ -175,8 +214,12 @@ impl AliEvent {
                     output_preview: preview,
                 })
             } else if rest.starts_with("human_gate_pending tool=") {
-                let tool = rest.strip_prefix("human_gate_pending tool=").unwrap()
-                    .split_whitespace().next().unwrap_or("");
+                let tool = rest
+                    .strip_prefix("human_gate_pending tool=")
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
                 Some(AliEvent::HumanGatePending {
                     request_id: String::new(),
                     tool_name: tool.to_string(),
@@ -184,8 +227,12 @@ impl AliEvent {
                     tool_index: 0,
                 })
             } else if rest.starts_with("human_gate_approved tool=") {
-                let tool = rest.strip_prefix("human_gate_approved tool=").unwrap()
-                    .split_whitespace().next().unwrap_or("");
+                let tool = rest
+                    .strip_prefix("human_gate_approved tool=")
+                    .unwrap()
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
                 Some(AliEvent::HumanGateApproved {
                     request_id: String::new(),
                     tool_name: tool.to_string(),
@@ -196,16 +243,15 @@ impl AliEvent {
         } else if let Some(detail) = rest.strip_prefix("L8 ") {
             let rewritten = detail.contains("critique=true");
             Some(AliEvent::CritiqueApplied { rewritten })
-        } else if let Some(stats) = rest.strip_prefix("L9 ") {
-            Some(AliEvent::PipelineDone {
-                request_id: String::new(),
-                latency_ms: 0,
-                tool_called: stats.contains("tool_called=true"),
-                prompt_tokens: 0,
-                completion_tokens: 0,
-            })
         } else {
-            None
+            rest.strip_prefix("L9 ")
+                .map(|stats| AliEvent::PipelineDone {
+                    request_id: String::new(),
+                    latency_ms: 0,
+                    tool_called: stats.contains("tool_called=true"),
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                })
         }
     }
 
@@ -232,26 +278,52 @@ impl AliEvent {
             AliEvent::ContextAssembled { token_count, .. } => format!("ctx={}t", token_count),
             AliEvent::ToolStart { name, .. } => format!("→ {}", name),
             AliEvent::ToolOutput { name, chunk, .. } => {
-                let preview = if chunk.len() > 40 { format!("{}...", &chunk[..40]) } else { chunk.clone() };
+                let preview = if chunk.len() > 40 {
+                    format!("{}...", &chunk[..40])
+                } else {
+                    chunk.clone()
+                };
                 format!("{}: {}", name, preview)
             }
-            AliEvent::ToolEnd { name, success, duration_ms, .. } => {
+            AliEvent::ToolEnd {
+                name,
+                success,
+                duration_ms,
+                ..
+            } => {
                 let icon = if *success { "✓" } else { "✗" };
                 format!("{} {} ({}ms)", icon, name, duration_ms)
             }
             AliEvent::IntentUpdate { state, goal, .. } => {
-                let short_goal = if goal.len() > 30 { format!("{}...", &goal[..30]) } else { goal.clone() };
+                let short_goal = if goal.len() > 30 {
+                    format!("{}...", &goal[..30])
+                } else {
+                    goal.clone()
+                };
                 format!("intent={} {}", state, short_goal)
             }
             AliEvent::SessionStart { session_name, .. } => format!("session: {}", session_name),
-            AliEvent::SessionEnd { session_name, duration_secs } => {
+            AliEvent::SessionEnd {
+                session_name,
+                duration_secs,
+            } => {
                 format!("session ended: {} ({}s)", session_name, duration_secs)
             }
-            AliEvent::HumanGatePending { tool_name, .. } => format!("awaiting approval: {}", tool_name),
-            AliEvent::CritiqueApplied { rewritten } => {
-                if *rewritten { "critique: rewritten".into() } else { "critique: passed".into() }
+            AliEvent::HumanGatePending { tool_name, .. } => {
+                format!("awaiting approval: {}", tool_name)
             }
-            AliEvent::PipelineDone { latency_ms, tool_called, .. } => {
+            AliEvent::CritiqueApplied { rewritten } => {
+                if *rewritten {
+                    "critique: rewritten".into()
+                } else {
+                    "critique: passed".into()
+                }
+            }
+            AliEvent::PipelineDone {
+                latency_ms,
+                tool_called,
+                ..
+            } => {
                 format!("done {}ms tools={}", latency_ms, tool_called)
             }
             AliEvent::Error { code, message } => format!("error {}: {}", code, message),

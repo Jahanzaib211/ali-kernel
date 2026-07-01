@@ -95,6 +95,7 @@ pub struct ActiveSession {
     /// Tool calls executed this session
     pub tool_calls: Vec<ToolCallRecord>,
     /// Key moments (intent stated, blocks hit, achievements)
+    #[allow(dead_code)] // reserved for a session-recall view, not read yet
     pub moments: Vec<SessionMoment>,
     /// Running frustration signals
     pub frustrations: Vec<String>,
@@ -109,6 +110,7 @@ pub struct ActiveSession {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // fields written on record_tool(), not read back yet — reserved for session-recall view
 pub struct ToolCallRecord {
     pub name: String,
     pub ts: DateTime<Utc>,
@@ -117,6 +119,7 @@ pub struct ToolCallRecord {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // reserved for a richer session-recall view, not constructed yet
 pub enum SessionMoment {
     IntentStated { text: String },
     Blocked { tool: String, attempt: usize },
@@ -218,6 +221,7 @@ impl Journal {
     }
 
     /// Record a concept encountered within the active session.
+    #[allow(dead_code)] // reserved for session-recall, not called yet
     pub async fn record_concept(&self, concept: String) {
         let mut guard = self.active.write().await;
         if let Some(ref mut session) = *guard {
@@ -228,6 +232,7 @@ impl Journal {
     }
 
     /// Record a session moment.
+    #[allow(dead_code)] // reserved for session-recall, not called yet
     pub async fn record_moment(&self, moment: SessionMoment) {
         let mut guard = self.active.write().await;
         if let Some(ref mut session) = *guard {
@@ -236,6 +241,7 @@ impl Journal {
     }
 
     /// Set energy level for the active session.
+    #[allow(dead_code)] // reserved for session-recall, not called yet
     pub async fn set_energy(&self, level: EnergyLevel) {
         let mut guard = self.active.write().await;
         if let Some(ref mut session) = *guard {
@@ -305,11 +311,13 @@ impl Journal {
     }
 
     /// Get the active session (read-only view). Returns None if no session is active.
+    #[allow(dead_code)] // reserved for a /journal endpoint, not wired up yet
     pub async fn get_active(&self) -> Option<ActiveSession> {
         self.active.read().await.clone()
     }
 
     /// Retrieve journal entries relevant to a query (keyword search across entries).
+    #[allow(dead_code)] // reserved for a /journal endpoint, not wired up yet
     pub async fn retrieve(&self, query: &str, limit: usize) -> Vec<JournalEntry> {
         let query_lower = query.to_lowercase();
         let query_tokens: Vec<&str> = query_lower
@@ -349,6 +357,7 @@ impl Journal {
     }
 
     /// Get the N most recent journal entries.
+    #[allow(dead_code)] // reserved for a /journal endpoint, not wired up yet
     pub async fn get_recent(&self, limit: usize) -> Vec<JournalEntry> {
         let entries_dir = &self.store_path;
         let mut all_entries: Vec<JournalEntry> = Vec::new();
@@ -369,12 +378,13 @@ impl Journal {
             }
         }
 
-        all_entries.sort_by(|a, b| b.ts.cmp(&a.ts));
+        all_entries.sort_by_key(|e| std::cmp::Reverse(e.ts));
         all_entries.truncate(limit);
         all_entries
     }
 
     /// List all session names (for session browser / resume).
+    #[allow(dead_code)] // reserved for a /journal endpoint, not wired up yet
     pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
         let mut sessions = Vec::new();
         if let Ok(content) = fs::read_to_string(&self.sessions_path) {
@@ -384,19 +394,20 @@ impl Journal {
                 }
             }
         }
-        sessions.sort_by(|a, b| b.start.cmp(&a.start));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.start));
         sessions
     }
 
     // ── Private helpers ──────────────────────────────────────────────────────
 
     fn write_entry(&self, entry: &JournalEntry) -> Result<()> {
-        let filename = format!("{}_{}.jsonl", entry.session_start.format("%Y-%m-%d"), entry.session_name);
+        let filename = format!(
+            "{}_{}.jsonl",
+            entry.session_start.format("%Y-%m-%d"),
+            entry.session_name
+        );
         let path = self.store_path.join(filename);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         let line = serde_json::to_string(entry)?;
         writeln!(file, "{}", line)?;
         Ok(())
@@ -414,6 +425,7 @@ impl Journal {
         Ok(())
     }
 
+    #[allow(dead_code)] // used only by retrieve(), which is reserved for a /journal endpoint
     fn score_entry(entry: &JournalEntry, query_tokens: &[&str]) -> f32 {
         let haystack = format!(
             "{} {} {} {:?} {:?}",
@@ -491,7 +503,8 @@ mod tests {
     #[tokio::test]
     async fn begin_and_end_session() {
         let j = temp_journal();
-        j.begin_session("test-session".into(), "test intent".into()).await;
+        j.begin_session("test-session".into(), "test intent".into())
+            .await;
         j.record_win("found a great pattern".into()).await;
         j.record_frustration("bubblewrap missing".into()).await;
         j.record_file("src/main.rs".into()).await;
@@ -510,7 +523,8 @@ mod tests {
     #[tokio::test]
     async fn retrieve_finds_recent_entry() {
         let j = temp_journal();
-        j.begin_session("auth-refactor".into(), "JWT refresh tokens".into()).await;
+        j.begin_session("auth-refactor".into(), "JWT refresh tokens".into())
+            .await;
         j.record_file("src/auth.rs".into()).await;
         j.end_session(EmotionalTone::Focused).await;
         let results = j.retrieve("JWT auth", 5).await;
@@ -521,7 +535,8 @@ mod tests {
     async fn get_recent_limits() {
         let j = temp_journal();
         for i in 0..12 {
-            j.begin_session(format!("session-{}", i), format!("intent {}", i)).await;
+            j.begin_session(format!("session-{}", i), format!("intent {}", i))
+                .await;
             j.end_session(EmotionalTone::Neutral).await;
         }
         let recent = j.get_recent(5).await;
