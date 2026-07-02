@@ -36,7 +36,7 @@ All-time ledger totals at time of writing (`curl -s 127.0.0.1:9000/stats`):
   "cache_read_input_tokens": 16261730,
   "cache_creation_input_tokens": 551948,
   "output_tokens": 38103,
-  "actual_spend_usd": 25.1678,
+  "api_value_usd": 25.1678,
   "estimated_savings_usd": 6.9741
 }
 ```
@@ -85,6 +85,21 @@ Claude Code ──► gateway /v1/messages          ──► api.anthropic.com
 
 ## 4. Skeptic FAQ
 
+### "You're on a Pro subscription — did you actually spend $25?"
+
+**No — and the ledger now says so explicitly.** Claude Code on a Pro/Max plan
+authenticates with an OAuth bearer token, not an API key; the plan is a flat
+monthly fee and tokens draw against plan usage limits. The gateway detects
+the auth type per request (`x-api-key` = pay-per-token, OAuth = subscription)
+and records it in every ledger line. `/stats` splits the total into
+`subscription_value_usd` (plan-limit value consumed — NOT dollars billed) and
+`api_key_value_usd` (approximates a real bill). The headline field is named
+`api_value_usd` — "what these tokens are worth at API list prices" — because
+calling it "spend" for subscription traffic would be exactly the kind of
+inflation this document exists to avoid. For a subscriber, the practical
+benefit of compression is **plan-limit headroom**: ~22% more work before
+hitting weekly caps, valued in the same API-list currency.
+
 ### "Is the compression lossy?"
 
 **Yes. Unapologetically.** This is not gzip; the model receives less text.
@@ -101,12 +116,31 @@ Exactly what happens, per over-budget block
    because errors, results, and conclusions cluster at the ends of tool
    output; the middle of a 500KB build log is the cheapest thing to lose.
 
+v2 quality guards (all deterministic — determinism is a tested invariant,
+because non-deterministic output would break Anthropic prompt caching):
+
+- **Salient-line rescue**: lines matching error/warning/fail/panic/exception
+  patterns in the elided middle are kept (capped at budget/8), so truncation
+  no longer eats the exact lines a coding agent needs most.
+- **Min-win guard**: if compression would shave under 10%, the original
+  passes through untouched — no marker noise for marginal gains.
+- **Lossless pass on all tool outputs**: steps 1-2 (ANSI, blank runs) now
+  apply to tool results of any size, not just over-budget ones — pure
+  savings with zero information loss.
+- **Observation mining**: every elided middle is appended (deduped by hash,
+  16KB sample cap, 200MB file cap) to `training/mined-middles.jsonl` — the
+  corpus a local-LLM semantic compressor will train on, so the lossy step
+  can eventually become a summarizing step. The local model is deliberately
+  NOT on the hot path today: summarizing 300KB on a local GPU adds seconds
+  per request and non-determinism would break prompt caching.
+
 What is **never** touched:
 
-- Blocks under budget (system < 8,000 chars; message/tool-result text <
-  4,000 chars) pass through byte-identical. Small requests: 0% change.
+- Under-budget system and user text blocks pass through byte-identical
+  (tool results of any size get the lossless ANSI/blank-line pass only —
+  truncation still requires crossing the 4,000-char budget).
 - JSON structure, `cache_control` markers, tool_use blocks, images,
-  non-text blocks — only the text *inside* oversized text fields is
+  non-text blocks — only the text *inside* text fields is
   replaced (`compress_text_field` in `anthropic_proxy.rs`).
 - The response direction. Nothing the model says is altered.
 
@@ -121,7 +155,7 @@ the compressor end-to-end.
 
 ### "Are the dollar figures a real bill?"
 
-`actual_spend_usd` is **priced from real billed token counts** at Anthropic
+`api_value_usd` is **priced from real billed token counts** at Anthropic
 list prices (July 2026): Fable/Mythos 5 $10/$50 per MTok, Opus 4.8 $5/$25,
 Haiku $1/$5, Sonnet/default $3/$15; cache reads at 0.1x input, cache writes
 at 1.25x input (`rates_for` in `usage_ledger.rs`, covered by unit tests).

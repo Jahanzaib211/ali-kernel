@@ -138,6 +138,12 @@ pub struct TuiConfig {
     pub claude_api_key: Option<String>,
     pub claude_model: String,
     pub claude_compression_ratio: f32,
+    /// Weekly plan-limit budget for the subscription bar, in API-value USD.
+    /// Anthropic doesn't expose plan quotas, so this is a user-tunable
+    /// estimate of how much API-value a week of your plan sustains.
+    pub sub_week_budget_usd: f64,
+    /// Monthly budget for the api-key credit bar, in USD.
+    pub key_month_budget_usd: f64,
     pub tui_theme: String,
     pub tui_pipeline_panel: bool,
     pub log_dir: PathBuf,
@@ -170,6 +176,8 @@ impl Default for TuiConfig {
             claude_api_key: None,
             claude_model: "claude-sonnet-4-20250514".into(),
             claude_compression_ratio: 0.3,
+            sub_week_budget_usd: 300.0,
+            key_month_budget_usd: 25.0,
             tui_theme: "dark".into(),
             tui_pipeline_panel: true,
             log_dir: std::env::current_dir()
@@ -290,6 +298,12 @@ impl TuiConfig {
         if let Some(&Value::Float(v)) = table.get("claude_compression_ratio") {
             cfg.claude_compression_ratio = v as f32;
         }
+        if let Some(&Value::Float(v)) = table.get("sub_week_budget_usd") {
+            cfg.sub_week_budget_usd = v;
+        }
+        if let Some(&Value::Float(v)) = table.get("key_month_budget_usd") {
+            cfg.key_month_budget_usd = v;
+        }
         if let Some(Value::String(ref v)) = table.get("tui_theme") {
             cfg.tui_theme = v.clone();
         }
@@ -316,6 +330,8 @@ impl TuiConfig {
             "claude_model" => self.claude_model = value.to_string(),
             "tui_theme" => self.tui_theme = value.to_string(),
             "tui_pipeline_panel" => self.tui_pipeline_panel = value != "false",
+            "sub_week_budget_usd" => self.sub_week_budget_usd = value.parse().ok()?,
+            "key_month_budget_usd" => self.key_month_budget_usd = value.parse().ok()?,
             _ => return None,
         }
         Some(())
@@ -369,6 +385,14 @@ impl TuiConfig {
             (
                 "tui_pipeline_panel".to_string(),
                 toml::Value::Boolean(self.tui_pipeline_panel),
+            ),
+            (
+                "sub_week_budget_usd".to_string(),
+                toml::Value::Float(self.sub_week_budget_usd),
+            ),
+            (
+                "key_month_budget_usd".to_string(),
+                toml::Value::Float(self.key_month_budget_usd),
             ),
         ]);
         let content = toml::to_string_pretty(&toml::Value::Table(table)).unwrap_or_default();

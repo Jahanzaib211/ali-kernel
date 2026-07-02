@@ -118,6 +118,14 @@ pub async fn messages_handler(
     // Tee the response through a channel: bytes are forwarded to the client
     // as they arrive while a copy feeds the usage scanner, so capturing the
     // billed `usage` block adds no client-visible latency.
+    // OAuth bearer = subscription plan (Claude Code Pro/Max); x-api-key =
+    // pay-per-token. Recorded per request so /stats can split value honestly.
+    let auth_kind = if headers.contains_key("x-api-key") {
+        "api_key"
+    } else {
+        "subscription"
+    };
+
     let sse = upstream
         .headers()
         .get("content-type")
@@ -148,6 +156,7 @@ pub async fn messages_handler(
             ledger.append(&UsageRecord {
                 ts: chrono::Utc::now(),
                 model: scanner.model.unwrap_or(req_model),
+                auth: auth_kind.to_string(),
                 chars_raw: before as u64,
                 chars_compressed: after as u64,
                 input_tokens: scanner.usage.input_tokens,
@@ -221,14 +230,31 @@ fn compress_block(block: &mut Value) {
     match block.get("type").and_then(|t| t.as_str()) {
         Some("text") => compress_text_field(block, "text", MSG_BUDGET),
         Some("tool_result") => match block.get_mut("content") {
-            Some(Value::String(s)) if s.len() > MSG_BUDGET => {
-                let compressed = compress::compress_observation(s, MSG_BUDGET);
-                block["content"] = Value::String(compressed);
+            Some(Value::String(s)) => {
+                // Tool outputs get the lossless pass (ANSI, blank runs) at any
+                // size; only over-budget ones are additionally truncated.
+                let new = if s.len() > MSG_BUDGET {
+                    compress::compress_observation(s, MSG_BUDGET)
+                } else {
+                    compress::compress_lossless(s)
+                };
+                if new != *s {
+                    block["content"] = Value::String(new);
+                }
             }
             Some(Value::Array(inner)) => {
                 for b in inner.iter_mut() {
                     if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        compress_text_field(b, "text", MSG_BUDGET);
+                        if let Some(text) = b.get("text").and_then(|t| t.as_str()) {
+                            let new = if text.len() > MSG_BUDGET {
+                                compress::compress_observation(text, MSG_BUDGET)
+                            } else {
+                                compress::compress_lossless(text)
+                            };
+                            if new != text {
+                                b["text"] = Value::String(new);
+                            }
+                        }
                     }
                 }
             }

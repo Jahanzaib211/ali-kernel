@@ -63,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
     // Create log dir BEFORE tracing init so we can tee to it
     logging::init_log_dir(&config.log_dir)?;
     training::init_training_dir(&config.training_dir)?;
+    // Elided middles feed the future semantic-compressor training corpus.
+    compress::set_mining_path(config.training_dir.join("mined-middles.jsonl"));
 
     // Tee writer: all tracing output goes to both stdout AND logs/gateway.log
     use tracing_subscriber::fmt::writer::MakeWriterExt;

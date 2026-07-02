@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Stylize,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Gauge, Paragraph, Wrap},
     Frame, Terminal,
 };
 use serde_json::Value;
@@ -198,53 +198,105 @@ fn render_kernel_panel(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     f.render_widget(para, area);
 }
 
-fn render_savings_panel(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
-    let dash = "—";
-    let lines = match &app.savings {
-        Some(s) => vec![
-            Line::from(vec![
-                Span::raw(" today    ").dim(),
-                Span::raw(format!("${:.4} spent", s.today_spend_usd)).fg(t.fg),
-                Span::raw(" · ").dim(),
-                Span::raw(format!("${:.4} saved", s.today_saved_usd)).fg(t.success),
-                Span::raw(format!(" ({} req)", s.today_requests)).dim(),
-            ]),
-            Line::from(vec![
-                Span::raw(" tokens   ").dim(),
-                Span::raw(format!("in {}", human_chars(s.today_input))).fg(t.accent),
-                Span::raw(" · ").dim(),
-                Span::raw(format!("cached {}", human_chars(s.today_cache_read))).fg(t.accent2),
-                Span::raw(" · ").dim(),
-                Span::raw(format!("write {}", human_chars(s.today_cache_write))).fg(t.accent),
-                Span::raw(" · ").dim(),
-                Span::raw(format!("out {}", human_chars(s.today_output))).fg(t.warning),
-            ]),
-            Line::from(vec![
-                Span::raw(" all time ").dim(),
-                Span::raw(format!("${:.4} spent", s.all_spend_usd)).fg(t.fg),
-                Span::raw(" · ").dim(),
-                Span::raw(format!("${:.4} saved", s.all_saved_usd)).fg(t.success),
-                Span::raw(format!(" ({} req)", s.all_requests)).dim(),
-            ]),
-            Line::from(vec![
-                Span::raw(" squeeze  ").dim(),
-                Span::raw(format!("{:.1}% smaller requests", s.all_compression_pct)).fg(t.accent2),
-                Span::raw(" · logs/usage.jsonl").dim(),
-            ]),
-        ],
-        None => vec![Line::from(vec![
-            Span::raw(" ").dim(),
-            Span::raw(dash).dim(),
-            Span::raw(" waiting for gateway /stats").dim(),
-        ])],
+fn render_savings_panel(f: &mut Frame, area: Rect, app: &App, cfg: &TuiConfig) {
+    let t = &cfg.theme;
+    let block = Block::default()
+        .title(" $ Usage & Savings (API value) ")
+        .borders(Borders::ALL)
+        .border_style(ratatui::style::Style::default().fg(t.border));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(s) = &app.savings else {
+        f.render_widget(
+            Paragraph::new(Line::from(Span::raw(" — waiting for gateway /stats").dim())),
+            inner,
+        );
+        return;
     };
-    let para = Paragraph::new(lines).block(
-        Block::default()
-            .title(" $ Savings (billed usage) ")
-            .borders(Borders::ALL)
-            .border_style(ratatui::style::Style::default().fg(t.border)),
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw(" today    ").dim(),
+            Span::raw(format!("${:.4} value", s.today_value_usd)).fg(t.fg),
+            Span::raw(" · ").dim(),
+            Span::raw(format!("${:.4} saved", s.today_saved_usd)).fg(t.success),
+            Span::raw(format!(" ({} req)", s.today_requests)).dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(" tokens   ").dim(),
+            Span::raw(format!("in {}", human_chars(s.today_input))).fg(t.accent),
+            Span::raw(" · ").dim(),
+            Span::raw(format!("cached {}", human_chars(s.today_cache_read))).fg(t.accent2),
+            Span::raw(" · ").dim(),
+            Span::raw(format!("write {}", human_chars(s.today_cache_write))).fg(t.accent),
+            Span::raw(" · ").dim(),
+            Span::raw(format!("out {}", human_chars(s.today_output))).fg(t.warning),
+        ]),
+        Line::from(vec![
+            Span::raw(" all time ").dim(),
+            Span::raw(format!("${:.4} value", s.all_value_usd)).fg(t.fg),
+            Span::raw(" · ").dim(),
+            Span::raw(format!("${:.4} saved", s.all_saved_usd)).fg(t.success),
+            Span::raw(format!(" ({} req)", s.all_requests)).dim(),
+        ]),
+        Line::from(vec![
+            Span::raw(" squeeze  ").dim(),
+            Span::raw(format!("{:.1}% smaller requests", s.all_compression_pct)).fg(t.accent2),
+            Span::raw(" · plan value ≠ dollars billed on subscription").dim(),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines), rows[0]);
+
+    let gauge = |used: f64, budget: f64, label: String| {
+        let ratio = if budget > 0.0 {
+            (used / budget).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let color = if ratio < 0.7 {
+            t.success
+        } else if ratio < 0.9 {
+            t.warning
+        } else {
+            t.error
+        };
+        Gauge::default()
+            .ratio(ratio)
+            .label(label)
+            .gauge_style(ratatui::style::Style::default().fg(color).bg(t.bg))
+    };
+    f.render_widget(
+        gauge(
+            s.week_sub_value_usd,
+            cfg.sub_week_budget_usd,
+            format!(
+                "sub 7d ${:.0} of ~${:.0} plan value",
+                s.week_sub_value_usd, cfg.sub_week_budget_usd
+            ),
+        ),
+        rows[1],
     );
-    f.render_widget(para, area);
+    f.render_widget(
+        gauge(
+            s.all_key_value_usd,
+            cfg.key_month_budget_usd,
+            format!(
+                "api credits ${:.2} of ${:.0} budget",
+                s.all_key_value_usd, cfg.key_month_budget_usd
+            ),
+        ),
+        rows[2],
+    );
 }
 
 fn render_live_feed(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
@@ -563,12 +615,12 @@ fn ui(f: &mut Frame, app: &App, cfg: &TuiConfig) {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(9),
-                    Constraint::Length(6),
+                    Constraint::Length(8),
                     Constraint::Min(3),
                 ])
                 .split(main_chunks[1]);
             render_kernel_panel(f, right[0], app, &cfg.theme);
-            render_savings_panel(f, right[1], app, &cfg.theme);
+            render_savings_panel(f, right[1], app, cfg);
             render_live_feed(f, right[2], app, &cfg.theme);
         }
     }

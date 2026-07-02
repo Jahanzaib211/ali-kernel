@@ -29,6 +29,12 @@ const CHARS_PER_TOKEN: u64 = 4;
 pub struct UsageRecord {
     pub ts: DateTime<Utc>,
     pub model: String,
+    /// "subscription" (OAuth bearer — Claude Code on Pro/Max, draws plan
+    /// limits) or "api_key" (x-api-key — pay-per-token). Old records without
+    /// the field deserialize to "" and are counted as subscription, since all
+    /// pre-field traffic was Claude Code OAuth.
+    #[serde(default)]
+    pub auth: String,
     pub chars_raw: u64,
     pub chars_compressed: u64,
     pub input_tokens: u64,
@@ -40,6 +46,10 @@ pub struct UsageRecord {
 pub struct UsageLedger {
     path: PathBuf,
     write_lock: Mutex<()>,
+    /// Month ("%Y-%m") of the records currently in the active file; when a
+    /// record from a newer month arrives the file rotates to
+    /// usage-<month>.jsonl so the active file stays small forever.
+    cur_month: Mutex<Option<String>>,
     /// /stats result cache — the Claude Code statusline polls on every
     /// render, so re-reading and re-pricing the whole JSONL each time is
     /// wasted work. 2s staleness is invisible to every consumer.
@@ -53,6 +63,7 @@ impl UsageLedger {
         Self {
             path,
             write_lock: Mutex::new(()),
+            cur_month: Mutex::new(None),
             stats_cache: Mutex::new(None),
         }
     }
@@ -66,6 +77,7 @@ impl UsageLedger {
             }
         };
         let _guard = self.write_lock.lock().unwrap_or_else(|p| p.into_inner());
+        self.rotate_if_new_month(&rec.ts);
         let res = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -76,14 +88,52 @@ impl UsageLedger {
         }
     }
 
+    /// Rotate the active file to usage-<YYYY-MM>.jsonl when the incoming
+    /// record's month is newer than the file's. Caller holds write_lock.
+    fn rotate_if_new_month(&self, ts: &DateTime<Utc>) {
+        let month = ts.format("%Y-%m").to_string();
+        let mut cm = self.cur_month.lock().unwrap_or_else(|p| p.into_inner());
+        if cm.is_none() {
+            // First append since startup: derive the file's month from its
+            // first record so restarts don't skip rotation.
+            *cm = std::fs::read_to_string(&self.path)
+                .ok()
+                .and_then(|c| {
+                    c.lines()
+                        .find_map(|l| serde_json::from_str::<UsageRecord>(l).ok())
+                })
+                .map(|r| r.ts.format("%Y-%m").to_string())
+                .or_else(|| Some(month.clone()));
+        }
+        if let Some(m) = cm.as_ref() {
+            if *m != month {
+                let rotated = self.path.with_file_name(format!("usage-{m}.jsonl"));
+                if let Err(e) = std::fs::rename(&self.path, &rotated) {
+                    warn!("usage ledger rotation failed: {e}");
+                }
+            }
+        }
+        *cm = Some(month);
+    }
+
+    /// Read every ledger file (active + rotated) in the log directory.
     fn read_all(&self) -> Vec<UsageRecord> {
-        let Ok(content) = std::fs::read_to_string(&self.path) else {
-            return Vec::new();
+        let mut records = Vec::new();
+        let dir = self.path.parent().unwrap_or(std::path::Path::new("."));
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return records;
         };
-        content
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect()
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if !(name.starts_with("usage") && name.ends_with(".jsonl")) {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                records.extend(content.lines().filter_map(|l| serde_json::from_str(l).ok()));
+            }
+        }
+        records
     }
 
     pub fn stats(&self) -> Value {
@@ -117,9 +167,12 @@ impl UsageLedger {
             "today": aggregate(&today),
             "last_7_days": aggregate(&week),
             "all_time": aggregate(&all),
-            "note": "actual_spend_usd is priced from billed usage; \
+            "note": "api_value_usd prices billed tokens at Anthropic list rates. \
+                     For subscription (OAuth) traffic it is plan-limit value \
+                     consumed, NOT dollars billed — the plan is a flat fee. \
+                     For api_key traffic it approximates the actual bill. \
                      estimated_savings_usd assumes ~4 chars/token at each \
-                     request's observed cache mix — an estimate, not a bill",
+                     request's observed cache mix — an estimate.",
         })
     }
 }
@@ -182,6 +235,13 @@ fn aggregate(records: &[&UsageRecord]) -> Value {
     };
     let spend: f64 = records.iter().map(|r| actual_cost_usd(r)).sum();
     let savings: f64 = records.iter().map(|r| estimated_savings_usd(r)).sum();
+    // "" = pre-auth-field records; all such traffic was Claude Code OAuth.
+    let sub_value: f64 = records
+        .iter()
+        .filter(|r| r.auth != "api_key")
+        .map(|r| actual_cost_usd(r))
+        .sum();
+    let key_value = spend - sub_value;
     serde_json::json!({
         "requests": records.len(),
         "input_tokens": sum(|r| r.input_tokens),
@@ -191,13 +251,62 @@ fn aggregate(records: &[&UsageRecord]) -> Value {
         "chars_raw": chars_raw,
         "chars_compressed": chars_compressed,
         "compression_pct": (compression_pct * 10.0).round() / 10.0,
-        "actual_spend_usd": (spend * 10000.0).round() / 10000.0,
+        "api_value_usd": (spend * 10000.0).round() / 10000.0,
+        "subscription_value_usd": (sub_value * 10000.0).round() / 10000.0,
+        "api_key_value_usd": (key_value * 10000.0).round() / 10000.0,
         "estimated_savings_usd": (savings * 10000.0).round() / 10000.0,
     })
 }
 
-pub async fn stats_handler(State(state): State<AppState>) -> Json<Value> {
-    Json(state.ledger.stats())
+pub async fn stats_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let stats = state.ledger.stats();
+    if q.get("format").map(|f| f == "prometheus").unwrap_or(false) {
+        return (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/plain; version=0.0.4",
+            )],
+            prometheus_text(&stats),
+        )
+            .into_response();
+    }
+    Json(stats).into_response()
+}
+
+/// Prometheus exposition of the all-time counters — one scrape target away
+/// from a Grafana dashboard.
+fn prometheus_text(stats: &Value) -> String {
+    let a = &stats["all_time"];
+    let g = |k: &str| a[k].as_f64().unwrap_or(0.0);
+    [
+        ("ali_requests_total", g("requests")),
+        ("ali_input_tokens_total", g("input_tokens")),
+        ("ali_cache_read_tokens_total", g("cache_read_input_tokens")),
+        (
+            "ali_cache_creation_tokens_total",
+            g("cache_creation_input_tokens"),
+        ),
+        ("ali_output_tokens_total", g("output_tokens")),
+        ("ali_chars_raw_total", g("chars_raw")),
+        ("ali_chars_compressed_total", g("chars_compressed")),
+        ("ali_api_value_usd_total", g("api_value_usd")),
+        (
+            "ali_subscription_value_usd_total",
+            g("subscription_value_usd"),
+        ),
+        ("ali_api_key_value_usd_total", g("api_key_value_usd")),
+        (
+            "ali_estimated_savings_usd_total",
+            g("estimated_savings_usd"),
+        ),
+    ]
+    .iter()
+    .map(|(k, v)| format!("{k} {v}\n"))
+    .collect()
 }
 
 /// Incremental extractor for model + usage from a response body as it streams
@@ -386,6 +495,7 @@ mod tests {
         let rec = UsageRecord {
             ts: Utc::now(),
             model: "claude-sonnet-4-5".into(),
+            auth: String::new(),
             chars_raw: 0,
             chars_compressed: 0,
             input_tokens: 1_000_000,
@@ -403,6 +513,7 @@ mod tests {
         let rec = UsageRecord {
             ts: Utc::now(),
             model: "claude-fable-5".into(),
+            auth: String::new(),
             chars_raw: 0,
             chars_compressed: 0,
             input_tokens: 1_000_000,
@@ -421,6 +532,7 @@ mod tests {
         let rec = UsageRecord {
             ts: Utc::now(),
             model: "claude-sonnet-4-5".into(),
+            auth: String::new(),
             chars_raw: 4_000_000,
             chars_compressed: 0,
             input_tokens: 0,

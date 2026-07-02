@@ -113,14 +113,19 @@ const MAX_LIVE_EVENTS: usize = 300;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SavingsStats {
     pub today_requests: u64,
-    pub today_spend_usd: f64,
+    pub today_value_usd: f64,
     pub today_saved_usd: f64,
     pub today_input: u64,
     pub today_cache_read: u64,
     pub today_cache_write: u64,
     pub today_output: u64,
+    /// Subscription (OAuth) API-value consumed in the last 7 days — drives
+    /// the plan-limit bar.
+    pub week_sub_value_usd: f64,
+    /// api-key API-value all time — drives the credit bar.
+    pub all_key_value_usd: f64,
     pub all_requests: u64,
-    pub all_spend_usd: f64,
+    pub all_value_usd: f64,
     pub all_saved_usd: f64,
     pub all_compression_pct: f64,
 }
@@ -131,14 +136,16 @@ impl SavingsStats {
         let u = |section: &str, key: &str| v[section][key].as_u64().unwrap_or(0);
         Self {
             today_requests: u("today", "requests"),
-            today_spend_usd: f("today", "actual_spend_usd"),
+            today_value_usd: f("today", "api_value_usd"),
             today_saved_usd: f("today", "estimated_savings_usd"),
             today_input: u("today", "input_tokens"),
             today_cache_read: u("today", "cache_read_input_tokens"),
             today_cache_write: u("today", "cache_creation_input_tokens"),
             today_output: u("today", "output_tokens"),
+            week_sub_value_usd: f("last_7_days", "subscription_value_usd"),
+            all_key_value_usd: f("all_time", "api_key_value_usd"),
             all_requests: u("all_time", "requests"),
-            all_spend_usd: f("all_time", "actual_spend_usd"),
+            all_value_usd: f("all_time", "api_value_usd"),
             all_saved_usd: f("all_time", "estimated_savings_usd"),
             all_compression_pct: f("all_time", "compression_pct"),
         }
