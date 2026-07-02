@@ -40,13 +40,20 @@ pub struct UsageRecord {
 pub struct UsageLedger {
     path: PathBuf,
     write_lock: Mutex<()>,
+    /// /stats result cache — the Claude Code statusline polls on every
+    /// render, so re-reading and re-pricing the whole JSONL each time is
+    /// wasted work. 2s staleness is invisible to every consumer.
+    stats_cache: Mutex<Option<(std::time::Instant, Value)>>,
 }
+
+const STATS_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl UsageLedger {
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
             write_lock: Mutex::new(()),
+            stats_cache: Mutex::new(None),
         }
     }
 
@@ -80,6 +87,21 @@ impl UsageLedger {
     }
 
     pub fn stats(&self) -> Value {
+        {
+            let cache = self.stats_cache.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some((at, v)) = cache.as_ref() {
+                if at.elapsed() < STATS_CACHE_TTL {
+                    return v.clone();
+                }
+            }
+        }
+        let computed = self.compute_stats();
+        *self.stats_cache.lock().unwrap_or_else(|p| p.into_inner()) =
+            Some((std::time::Instant::now(), computed.clone()));
+        computed
+    }
+
+    fn compute_stats(&self) -> Value {
         let records = self.read_all();
         let now = Utc::now();
         let today: Vec<_> = records
@@ -217,6 +239,11 @@ impl UsageScanner {
             while let Some(pos) = self.pending.iter().position(|&b| b == b'\n') {
                 let line: Vec<u8> = self.pending.drain(..=pos).collect();
                 self.process_sse_line(&line[..line.len() - 1]);
+            }
+            // A well-formed SSE line is small; a newline-free run beyond the
+            // cap means garbage upstream — drop it rather than grow unbounded.
+            if self.pending.len() > JSON_BODY_CAP {
+                self.pending.clear();
             }
         } else if self.pending.len() < JSON_BODY_CAP {
             self.pending.extend_from_slice(chunk);

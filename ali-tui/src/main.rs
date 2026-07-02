@@ -210,6 +210,16 @@ fn render_savings_panel(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
                 Span::raw(format!(" ({} req)", s.today_requests)).dim(),
             ]),
             Line::from(vec![
+                Span::raw(" tokens   ").dim(),
+                Span::raw(format!("in {}", human_chars(s.today_input))).fg(t.accent),
+                Span::raw(" · ").dim(),
+                Span::raw(format!("cached {}", human_chars(s.today_cache_read))).fg(t.accent2),
+                Span::raw(" · ").dim(),
+                Span::raw(format!("write {}", human_chars(s.today_cache_write))).fg(t.accent),
+                Span::raw(" · ").dim(),
+                Span::raw(format!("out {}", human_chars(s.today_output))).fg(t.warning),
+            ]),
+            Line::from(vec![
                 Span::raw(" all time ").dim(),
                 Span::raw(format!("${:.4} spent", s.all_spend_usd)).fg(t.fg),
                 Span::raw(" · ").dim(),
@@ -470,8 +480,12 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, cfg: &TuiConfig) {
         Span::raw(" ○ idle").dim()
     };
 
+    // Flapping-bird logo, advanced by the 100ms UI tick (~3 ticks per frame).
+    const LOGO_FRAMES: [&str; 4] = ["\\(·ө·)/", "―(·ө·)―", "/(·ө·)\\", "―(·ө·)―"];
+    let logo = LOGO_FRAMES[(app.tick / 3) as usize % LOGO_FRAMES.len()];
     let row1 = Line::from(vec![
-        Span::raw(" ali").bold().fg(t.accent),
+        Span::raw(format!(" {logo} ")).bold().fg(t.accent2),
+        Span::raw("ali").bold().fg(t.accent),
         Span::raw("-kernel ").bold(),
         Span::raw(format!("v{} ", cfg.identity_version)).dim(),
         Span::raw("│ ").dim(),
@@ -549,7 +563,7 @@ fn ui(f: &mut Frame, app: &App, cfg: &TuiConfig) {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(9),
-                    Constraint::Length(5),
+                    Constraint::Length(6),
                     Constraint::Min(3),
                 ])
                 .split(main_chunks[1]);
@@ -886,7 +900,7 @@ async fn run_tui(app: Arc<RwLock<App>>, gw: GatewayClient, mut cfg: TuiConfig) -
         let app = app.clone();
         let gw = gw.clone();
         tokio::spawn(async move {
-            let mut iv = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            let mut iv = tokio::time::interval(tokio::time::Duration::from_secs(2));
             iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 iv.tick().await;
@@ -917,7 +931,11 @@ async fn run_tui(app: Arc<RwLock<App>>, gw: GatewayClient, mut cfg: TuiConfig) -
             _ = tick.tick() => None,
         };
 
-        let Some(event) = event else { continue };
+        let Some(event) = event else {
+            let mut a = app.write().await;
+            a.tick = a.tick.wrapping_add(1);
+            continue;
+        };
 
         match event {
             Event::Paste(text) => {

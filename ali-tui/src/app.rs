@@ -115,6 +115,10 @@ pub struct SavingsStats {
     pub today_requests: u64,
     pub today_spend_usd: f64,
     pub today_saved_usd: f64,
+    pub today_input: u64,
+    pub today_cache_read: u64,
+    pub today_cache_write: u64,
+    pub today_output: u64,
     pub all_requests: u64,
     pub all_spend_usd: f64,
     pub all_saved_usd: f64,
@@ -129,6 +133,10 @@ impl SavingsStats {
             today_requests: u("today", "requests"),
             today_spend_usd: f("today", "actual_spend_usd"),
             today_saved_usd: f("today", "estimated_savings_usd"),
+            today_input: u("today", "input_tokens"),
+            today_cache_read: u("today", "cache_read_input_tokens"),
+            today_cache_write: u("today", "cache_creation_input_tokens"),
+            today_output: u("today", "output_tokens"),
             all_requests: u("all_time", "requests"),
             all_spend_usd: f("all_time", "actual_spend_usd"),
             all_saved_usd: f("all_time", "estimated_savings_usd"),
@@ -182,6 +190,8 @@ pub struct App {
     pub scroll_offset: usize,
     /// Latest usage-ledger aggregates from the gateway's /stats endpoint.
     pub savings: Option<SavingsStats>,
+    /// UI ticks (~100ms each) driving the animated logo.
+    pub tick: u64,
 }
 
 impl App {
@@ -205,6 +215,7 @@ impl App {
             compress_events: 0,
             scroll_offset: 0,
             savings: None,
+            tick: 0,
         }
     }
 
