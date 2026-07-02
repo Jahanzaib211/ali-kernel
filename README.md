@@ -27,10 +27,11 @@ Client (any OpenAI SDK)
 │  L1  Binary Attestation         (SHA-256 /proc/self/exe)  │
 │  L2  Integrity Vault            (Constitution SHA-256)    │
 │  L3  Semantic Router            (regex classification)    │
-│  L4  Memory                     (Qdrant stub → Phase 3)  │
+│  L4  Memory                     (Qdrant + local fallback) │
 │  L5  Context Assembler          (sliding window, tokens)  │
+│  L5.5 Compression               (shrinks oversized text)   │
 │  L6  Brain Proxy                (SSE + retry forwarding)  │
-│  L7  Tool Executor              (sandbox stub → Phase 4)  │
+│  L7  Tool Executor              (bubblewrap-sandboxed)     │
 │  L8  Critique Loop              (code review + fix)       │
 │  L9  Observability              (JSONL pipeline log)      │
 └───────────────────────────────────────────────────────────┘
@@ -44,7 +45,9 @@ Client (any OpenAI SDK)
 
 ## Launcher
 
-Type `ali` in your terminal to launch the Ali Kernel TUI. See `ali.sh` for the launch script.
+Type `./ali` in the repo root to launch the Ali Kernel TUI (add it to your `PATH` to
+just type `ali` from anywhere). See the `ali` script for what it does: starts
+`llama-server` and the gateway if they aren't already running, then launches the TUI.
 
 ---
 
@@ -84,9 +87,12 @@ Type `ali` in your terminal to launch the Ali Kernel TUI. See `ali.sh` for the l
   --jinja \
   -c 16384 \
   --cache-ram 4096 \
-  --host 0.0.0.0 \
+  --host 127.0.0.1 \
   -m ~/ornith-1.0-9b-Q4_K_M.gguf
 ```
+
+`--host 127.0.0.1` matters — binding to `0.0.0.0` exposes the raw, unauthenticated model
+API to your network. See `GUIDE.md` for why this was tightened.
 
 Verify: `curl http://localhost:8081/health` → `{"status":"ok"}`
 
@@ -126,11 +132,10 @@ sha256sum constitutions/SOUL.md | awk '{print $1}' > /tmp/ali-ram-moat/soul_gold
 # Foreground
 ./target/release/ali-kernel
 
-# systemd (production)
-sudo cp ~/ali-kernel.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ali-kernel
-sudo journalctl -fu ali-kernel
+# systemd (production) — installs + enables both llama-server and the gateway,
+# so they auto-start on boot instead of needing ./ali run by hand
+sudo bash install-service.sh
+sudo journalctl -fu ali-kernel -fu llama-server
 ```
 
 ---
@@ -144,9 +149,13 @@ All endpoints are OpenAI SDK-compatible.
 ```json
 {
   "status": "alive",
-  "version": "1.0.0",
-  "layers": 9,
-  "llama_server": "healthy"
+  "version": "2.1.0",
+  "capabilities": ["rag_memory", "agentic_tools", "crate_aware_tools",
+                   "behavioral_shield", "eval_harness", "rlaif_capture"],
+  "backend": "healthy",
+  "backend_url": "http://127.0.0.1:8081/v1",
+  "backend_local": true,
+  "model": "ornith"
 }
 ```
 
@@ -155,9 +164,16 @@ All endpoints are OpenAI SDK-compatible.
 ```json
 {
   "object": "list",
-  "data": [{ "id": "ornith", "object": "model", "owned_by": "ali-kernel" }]
+  "data": [{ "id": "ornith", "object": "model", "owned_by": "ali-kernel", "created": 1700000000 }]
 }
 ```
+
+### `POST /v1/messages`
+
+Anthropic Messages API proxy — point Claude Code at the gateway
+(`ANTHROPIC_BASE_URL=http://127.0.0.1:9000`) to compress its own context
+before forwarding to `api.anthropic.com`. Auth passthrough: your `x-api-key`
+is forwarded unchanged, never stored or logged. See `COMPRESSION.md`.
 
 ### `POST /v1/chat/completions`
 
@@ -211,6 +227,26 @@ curl -X POST http://localhost:9000/v1/chat/completions \
 - Empty `messages` → HTTP 400
 - `reasoning_content` is passed through transparently
 
+### Human Gate — `POST /v1/approvals`, `GET /v1/approvals/:request_id`
+
+Pass `"human_gate": true` in a `/v1/chat/completions` request (or set
+`human_gate_enabled = true` in config) to pause before any tool call executes
+and wait for your approval:
+
+```bash
+# Check what's pending
+curl http://localhost:9000/v1/approvals/<request_id>
+
+# Approve (optionally rewriting the tool's args) or deny
+curl -X POST http://localhost:9000/v1/approvals \
+  -H "Content-Type: application/json" \
+  -d '{"request_id": "<request_id>", "action": "approve", "tool_index": 0}'
+```
+
+Unresolved approvals time out after 5 minutes. Note: these endpoints are not
+authenticated beyond the (unguessable) `request_id` — see `GUIDE.md` for the
+current threat model.
+
 ### `GET /benchmark`
 
 Runs 5 internal test prompts and returns timing stats:
@@ -222,7 +258,7 @@ Runs 5 internal test prompts and returns timing stats:
     ...
   ],
   "model": "ornith",
-  "gateway_version": "1.0.0"
+  "gateway_version": "2.1.0"
 }
 ```
 
@@ -232,10 +268,10 @@ Runs 5 internal test prompts and returns timing stats:
 
 ### Binary Attestation (L1)
 
-On first run, the gateway hashes itself (`/proc/self/exe`, SHA-256) and writes the hash to `/tmp/ornith-ram-moat/golden_binary.hash`. Every subsequent run verifies this hash. A mismatch triggers an immediate `exit(1)`.
+On first run, the gateway hashes itself (`/proc/self/exe`, SHA-256) and writes the hash to `/tmp/ali-ram-moat/golden_binary.hash`. Every subsequent run verifies this hash. A mismatch triggers an immediate `exit(1)`.
 
 ```
-First run:  hash(binary) → /tmp/ornith-ram-moat/golden_binary.hash
+First run:  hash(binary) → /tmp/ali-ram-moat/golden_binary.hash
 Every run:  hash(binary) == stored_hash  →  proceed
                                          →  exit(1) if mismatch
 ```
@@ -285,12 +321,14 @@ Every request is logged to `logs/pipeline.jsonl`:
 | L1 Binary Attestation | `security.rs` | Production |
 | L2 Constitution Integrity | `security.rs` | Production |
 | L3 Semantic Router | `router.rs` | Production |
-| L4 Memory | `memory.rs` | Stub (Phase 3: Qdrant) |
+| L4 Memory | `memory.rs` | Production (Qdrant when `QDRANT_URL` set, local keyword fallback otherwise) |
 | L5 Context Assembly | `context.rs` | Production |
-| L6 Brain Proxy | `brain.rs` | Production |
-| L7 Tool Executor | `tools.rs` | Stub (Phase 4: bubblewrap) |
+| L5.5 Compression | `compress.rs`, `anthropic_proxy.rs` | Production (shared by the Ornith and Claude-proxy paths) |
+| L6 Brain Proxy | `brain.rs`, `anthropic_proxy.rs` | Production (pluggable backend + `/v1/messages` Anthropic face) |
+| L7 Tool Executor | `tools.rs` | Production (bubblewrap-sandboxed `bash_exec`; file tools confined to `allowed_workspace_paths`) |
 | L8 Critique Loop | `critique.rs` | Production |
 | L9 Observability | `logging.rs` | Production |
+| Human Gate | `human_gate.rs` | Production — optional approval pause before tool execution, see below |
 
 ---
 
@@ -305,8 +343,12 @@ All config via `.env` (see `.env.example`):
 | `LLAMA_PORT` | llama-server port | `8081` |
 | `GATEWAY_PORT` | Gateway listen port | `9000` |
 | `SYSTEM_PROMPT` | System-level instruction | see `.env.example` |
-| `RAM_MOAT` | Path for integrity hashes | `/tmp/ornith-ram-moat` |
+| `RAM_MOAT` | Path for integrity hashes | `/tmp/ali-ram-moat` |
 | `LOG_DIR` | Pipeline log directory | `logs/` |
+| `BACKEND_URL` | Swap the model backend to any OpenAI-compatible provider | local llama.cpp |
+| `ANTHROPIC_BASE_URL` | Set to `http://127.0.0.1:9000` to route Claude Code itself through the gateway's `/v1/messages` compressing proxy | unset |
+
+See `.env.example` for the full set (dev-loop workspace, network-tool toggles, etc.) with inline comments.
 
 ---
 
@@ -363,9 +405,13 @@ test context::tests::memory_injected_after_system ... ok
 |-------|---------|--------|
 | 1 | Core gateway (L0–L9) | **Done** |
 | 2 | Streaming SSE proxy | **Done** |
-| 3 | Qdrant vector memory (L4) | Planned |
-| 4 | bubblewrap/wasmtime tool execution (L7) | Planned |
-| 5 | Multi-model routing | Planned |
+| 3 | Qdrant vector memory (L4) | **Done** (optional — local keyword fallback when unset) |
+| 4 | bubblewrap tool sandboxing (L7) | **Done** |
+| 5 | Multi-model routing | **Done** (pluggable `BACKEND_URL` + Anthropic `/v1/messages` proxy) |
+
+Full current phase-by-phase status (telemetry spine, memory-integrity vault, runtime
+resilience, autonomy, etc.) lives in `ROADMAP.md` — this table is just the high-level
+summary and won't be kept in perfect lockstep with it.
 
 ---
 

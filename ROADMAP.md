@@ -1,6 +1,6 @@
 # Ali Kernel — Roadmap & Crate Arsenal
 
-_Last updated: 2026-06-30._ Companion to `STATUS.md` (live status) and the engineering plan.
+_Last updated: 2026-07-02._ Companion to `STATUS.md` (live status) and the engineering plan.
 
 ## Vision
 
@@ -53,7 +53,7 @@ surface**, and our own rules say *minimize deps, run `cargo audit`, stay soverei
 ### Infrastructure (per phase)
 | Concern | Crate | Phase |
 |---|---|---|
-| Web/runtime | `axum`, `tokio`, `tower-http` (have) | core |
+| Web/runtime | `axum`, `tokio`, `tower` (have) | core |
 | Integrity / Merkle | `sha2` (have), `rs_merkle` | 3 (vault) |
 | Auth handshake | `jsonwebtoken`, `hmac` | 5 |
 | Resilience | `governor` (rate-limit), `backon` (retry → replace hand-rolled), `sysinfo` (CPU), `nvml-wrapper` (VRAM) | 4 |

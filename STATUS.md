@@ -72,7 +72,7 @@ Claude/API spend minimal.
 |---|---|---|
 | llama-server + gateway running | ✅ | `:8081` + `:9000` healthy, 6 GB VRAM on the RTX 3060 |
 | Constitutional wrap (SOUL/AGENT/OWNER) | ✅ | gateway answers in the Ornith persona; raw `:8081` does not |
-| Binary + constitution attestation | ✅ (startup) | hashes sealed in `/tmp/ornith-ram-moat` |
+| Binary + constitution attestation | ✅ (startup) | hashes sealed in `/tmp/ali-ram-moat` |
 | Semantic routing, context assembly, RAG memory | ✅ | memory retrieval + write-back writing `training/memory.jsonl` |
 | Agentic tool loop (L7) | ⚠️ runs, format bug | fires, but tool-call format is wrong (see below) |
 | Self-critique (L8) | ⚠️ runs, too lenient | executes on code answers but finds no faults |

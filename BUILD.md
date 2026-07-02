@@ -1,7 +1,7 @@
 # How This Is Being Built — Parties, Roles & Method
 
 _A living record of who builds the Ali Kernel and how. Persistent by design._
-_Last updated: 2026-06-30._
+_Last updated: 2026-07-02._
 
 ---
 
