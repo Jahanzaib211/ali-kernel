@@ -108,6 +108,35 @@ impl LiveEvent {
 
 const MAX_LIVE_EVENTS: usize = 300;
 
+/// Aggregates from the gateway's usage ledger (`GET /stats`) — real billed
+/// tokens, not the char-count heuristic shown in the status bar.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SavingsStats {
+    pub today_requests: u64,
+    pub today_spend_usd: f64,
+    pub today_saved_usd: f64,
+    pub all_requests: u64,
+    pub all_spend_usd: f64,
+    pub all_saved_usd: f64,
+    pub all_compression_pct: f64,
+}
+
+impl SavingsStats {
+    pub fn from_value(v: &serde_json::Value) -> Self {
+        let f = |section: &str, key: &str| v[section][key].as_f64().unwrap_or(0.0);
+        let u = |section: &str, key: &str| v[section][key].as_u64().unwrap_or(0);
+        Self {
+            today_requests: u("today", "requests"),
+            today_spend_usd: f("today", "actual_spend_usd"),
+            today_saved_usd: f("today", "estimated_savings_usd"),
+            all_requests: u("all_time", "requests"),
+            all_spend_usd: f("all_time", "actual_spend_usd"),
+            all_saved_usd: f("all_time", "estimated_savings_usd"),
+            all_compression_pct: f("all_time", "compression_pct"),
+        }
+    }
+}
+
 /// Remove ANSI escape sequences without pulling in a regex dependency.
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -151,6 +180,8 @@ pub struct App {
     pub compress_events: u64,
     /// Transcript scroll: wrapped lines up from the bottom. 0 = follow live output.
     pub scroll_offset: usize,
+    /// Latest usage-ledger aggregates from the gateway's /stats endpoint.
+    pub savings: Option<SavingsStats>,
 }
 
 impl App {
@@ -173,6 +204,7 @@ impl App {
             saved_chars: 0,
             compress_events: 0,
             scroll_offset: 0,
+            savings: None,
         }
     }
 
@@ -432,7 +464,10 @@ mod tests {
     #[test]
     fn strips_ansi() {
         let s = "\x1b[2m2026-07-02T01:33:49.889064Z\x1b[0m \x1b[32m INFO\x1b[0m PIPE L5.5 x";
-        assert_eq!(strip_ansi(s), "2026-07-02T01:33:49.889064Z  INFO PIPE L5.5 x");
+        assert_eq!(
+            strip_ansi(s),
+            "2026-07-02T01:33:49.889064Z  INFO PIPE L5.5 x"
+        );
     }
 
     #[test]

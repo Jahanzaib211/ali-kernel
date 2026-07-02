@@ -10,9 +10,12 @@ use axum::{
     http::{HeaderMap, HeaderName, Response, StatusCode},
     Json,
 };
+use futures::StreamExt;
 use serde_json::Value;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
+use crate::usage_ledger::{UsageRecord, UsageScanner};
 use crate::{compress, AppState};
 
 const ANTHROPIC_API: &str = "https://api.anthropic.com";
@@ -40,6 +43,11 @@ pub async fn messages_handler(
 
     // Measure context before compression
     let before = serialized_size(&body);
+    let req_model = body
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("unknown")
+        .to_string();
 
     // Compress system prompt (often enormous — CLAUDE.md, rules, etc.)
     compress_system(&mut body);
@@ -107,9 +115,51 @@ pub async fn messages_handler(
         }
     }
 
-    let stream = upstream.bytes_stream();
+    // Tee the response through a channel: bytes are forwarded to the client
+    // as they arrive while a copy feeds the usage scanner, so capturing the
+    // billed `usage` block adds no client-visible latency.
+    let sse = upstream
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+    let record_usage = status.is_success();
+    let ledger = state.ledger.clone();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, reqwest::Error>>(32);
+    tokio::spawn(async move {
+        let mut scanner = UsageScanner::new(sse);
+        let mut stream = upstream.bytes_stream();
+        while let Some(item) = stream.next().await {
+            if record_usage {
+                if let Ok(chunk) = &item {
+                    scanner.feed(chunk);
+                }
+            }
+            if tx.send(item).await.is_err() {
+                // Client hung up; drain upstream only for the usage record.
+                if !record_usage {
+                    return;
+                }
+            }
+        }
+        scanner.finish();
+        if record_usage && scanner.found_usage() {
+            ledger.append(&UsageRecord {
+                ts: chrono::Utc::now(),
+                model: scanner.model.unwrap_or(req_model),
+                chars_raw: before as u64,
+                chars_compressed: after as u64,
+                input_tokens: scanner.usage.input_tokens,
+                cache_creation_input_tokens: scanner.usage.cache_creation_input_tokens,
+                cache_read_input_tokens: scanner.usage.cache_read_input_tokens,
+                output_tokens: scanner.usage.output_tokens,
+            });
+        }
+    });
+
     builder
-        .body(Body::from_stream(stream))
+        .body(Body::from_stream(ReceiverStream::new(rx)))
         .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "body build failed"))
 }
 
@@ -241,7 +291,9 @@ mod tests {
             }]
         });
         compress_messages(&mut body);
-        let c = body["messages"][0]["content"][0]["content"].as_str().unwrap();
+        let c = body["messages"][0]["content"][0]["content"]
+            .as_str()
+            .unwrap();
         assert!(c.len() < 50_000);
         assert!(c.contains("compressed by L5.5"));
         assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], "tu_1");
@@ -263,7 +315,9 @@ mod tests {
             }]
         });
         compress_messages(&mut body);
-        let inner = body["messages"][0]["content"][0]["content"].as_array().unwrap();
+        let inner = body["messages"][0]["content"][0]["content"]
+            .as_array()
+            .unwrap();
         let t = inner[0]["text"].as_str().unwrap();
         assert!(t.len() < 30_000);
         // non-text blocks pass through untouched

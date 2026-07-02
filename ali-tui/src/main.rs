@@ -3,7 +3,7 @@ mod config;
 mod gateway;
 
 use anyhow::Result;
-use app::{human_chars, App, AppMode, PendingApproval, RiskLevel};
+use app::{human_chars, App, AppMode, PendingApproval, RiskLevel, SavingsStats};
 use config::{Theme, TuiConfig};
 use crossterm::{
     event::{
@@ -153,25 +153,84 @@ fn render_kernel_panel(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         None => (dash.to_string(), t.muted),
     };
     let lines = vec![
-        kv(" route    ", p.l3_route.clone().unwrap_or_else(|| dash.into()), t.accent),
+        kv(
+            " route    ",
+            p.l3_route.clone().unwrap_or_else(|| dash.into()),
+            t.accent,
+        ),
         kv(
             " memories ",
-            p.l4_memories.map(|n| n.to_string()).unwrap_or_else(|| dash.into()),
+            p.l4_memories
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| dash.into()),
             t.accent,
         ),
         kv(
             " messages ",
-            p.l5_messages.map(|n| n.to_string()).unwrap_or_else(|| dash.into()),
+            p.l5_messages
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| dash.into()),
             t.accent,
         ),
-        kv(" compress ", p.l5_5_compression.clone().unwrap_or_else(|| dash.into()), t.accent2),
-        kv(" tool     ", p.l7_tool.clone().unwrap_or_else(|| dash.into()), t.warning),
+        kv(
+            " compress ",
+            p.l5_5_compression.clone().unwrap_or_else(|| dash.into()),
+            t.accent2,
+        ),
+        kv(
+            " tool     ",
+            p.l7_tool.clone().unwrap_or_else(|| dash.into()),
+            t.warning,
+        ),
         kv(" critique ", critique.0, critique.1),
-        kv(" tokens   ", p.l9_tokens.clone().unwrap_or_else(|| dash.into()), t.accent2),
+        kv(
+            " tokens   ",
+            p.l9_tokens.clone().unwrap_or_else(|| dash.into()),
+            t.accent2,
+        ),
     ];
     let para = Paragraph::new(lines).block(
         Block::default()
             .title(" Kernel ")
+            .borders(Borders::ALL)
+            .border_style(ratatui::style::Style::default().fg(t.border)),
+    );
+    f.render_widget(para, area);
+}
+
+fn render_savings_panel(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
+    let dash = "—";
+    let lines = match &app.savings {
+        Some(s) => vec![
+            Line::from(vec![
+                Span::raw(" today    ").dim(),
+                Span::raw(format!("${:.4} spent", s.today_spend_usd)).fg(t.fg),
+                Span::raw(" · ").dim(),
+                Span::raw(format!("${:.4} saved", s.today_saved_usd)).fg(t.success),
+                Span::raw(format!(" ({} req)", s.today_requests)).dim(),
+            ]),
+            Line::from(vec![
+                Span::raw(" all time ").dim(),
+                Span::raw(format!("${:.4} spent", s.all_spend_usd)).fg(t.fg),
+                Span::raw(" · ").dim(),
+                Span::raw(format!("${:.4} saved", s.all_saved_usd)).fg(t.success),
+                Span::raw(format!(" ({} req)", s.all_requests)).dim(),
+            ]),
+            Line::from(vec![
+                Span::raw(" squeeze  ").dim(),
+                Span::raw(format!("{:.1}% smaller requests", s.all_compression_pct)).fg(t.accent2),
+                Span::raw(" · logs/usage.jsonl").dim(),
+            ]),
+        ],
+        None => vec![Line::from(vec![
+            Span::raw(" ").dim(),
+            Span::raw(dash).dim(),
+            Span::raw(" waiting for gateway /stats").dim(),
+        ])],
+    };
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .title(" $ Savings (billed usage) ")
             .borders(Borders::ALL)
             .border_style(ratatui::style::Style::default().fg(t.border)),
     );
@@ -268,7 +327,7 @@ fn render_command_help(f: &mut Frame, area: Rect, t: &Theme) {
     let lines = vec![
         Line::from(vec![Span::raw(" SLASH ").bold().white().on_black()]),
         Line::from(vec![
-            Span::raw("/help /clear /retry /tools /status /exit").cyan(),
+            Span::raw("/help /clear /retry /tools /status /exit").cyan()
         ]),
         Line::from(""),
         Line::from(vec![Span::raw(" COLON ").bold().white().on_black()]),
@@ -288,9 +347,7 @@ fn render_command_help(f: &mut Frame, area: Rect, t: &Theme) {
             Span::raw(":save / :load  ").fg(t.warning),
             Span::raw("persist / reload").dim(),
         ]),
-        Line::from(vec![
-            Span::raw(":identity :status :tools").fg(t.accent2),
-        ]),
+        Line::from(vec![Span::raw(":identity :status :tools").fg(t.accent2)]),
         Line::from(vec![
             Span::raw(":quit          ").fg(t.error),
             Span::raw("exit").dim(),
@@ -325,8 +382,15 @@ fn render_approval_card(f: &mut Frame, area: Rect, approvals: &[PendingApproval]
             Span::raw(" TOOL CALL ").bold().white().on_red(),
             Span::raw("  "),
             Span::raw(format!("{} ", approval.tool_name)).bold().white(),
-            Span::raw(format!("[{}] ", approval.risk.label())).bold().fg(risk_color),
-            Span::raw(format!("#{}  ({} pending)", approval.tool_index, approvals.len())).dim(),
+            Span::raw(format!("[{}] ", approval.risk.label()))
+                .bold()
+                .fg(risk_color),
+            Span::raw(format!(
+                "#{}  ({} pending)",
+                approval.tool_index,
+                approvals.len()
+            ))
+            .dim(),
         ]),
         Line::from(vec![
             Span::raw(" args: ").dim(),
@@ -367,9 +431,10 @@ fn render_input(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
     f.render_widget(input, area);
 
     if app.current_input.is_empty() && app.mode == AppMode::Chat {
-        let hint = Paragraph::new(Line::from(vec![
-            Span::raw("   type a prompt · / commands · : config").dim(),
-        ]));
+        let hint = Paragraph::new(Line::from(vec![Span::raw(
+            "   type a prompt · / commands · : config",
+        )
+        .dim()]));
         f.render_widget(
             hint,
             Rect {
@@ -419,7 +484,9 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App, cfg: &TuiConfig) {
         typing,
     ]);
     let row2 = Line::from(vec![
-        Span::raw(" L5.5 ").bold().fg(ratatui::style::Color::Magenta),
+        Span::raw(" L5.5 ")
+            .bold()
+            .fg(ratatui::style::Color::Magenta),
         Span::raw(format!(
             "saved {} chars in {} squeezes",
             human_chars(app.saved_chars),
@@ -440,7 +507,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App, t: &Theme) {
         Line::from(vec![Span::raw(format!(" {}", msg)).fg(t.warning)])
     } else {
         Line::from(vec![Span::raw(
-            " Enter send · ↑↓ history · PgUp/PgDn scroll · End follow · : config · Ctrl+C quit",
+            " Enter send · ↑↓ history · PgUp/PgDn scroll · Ctrl+Y copy mode · : config · Ctrl+C quit",
         )
         .dim()])
     };
@@ -480,10 +547,15 @@ fn ui(f: &mut Frame, app: &App, cfg: &TuiConfig) {
             render_transcript(f, main_chunks[0], app, &cfg.theme);
             let right = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(9), Constraint::Min(3)])
+                .constraints([
+                    Constraint::Length(9),
+                    Constraint::Length(5),
+                    Constraint::Min(3),
+                ])
                 .split(main_chunks[1]);
             render_kernel_panel(f, right[0], app, &cfg.theme);
-            render_live_feed(f, right[1], app, &cfg.theme);
+            render_savings_panel(f, right[1], app, &cfg.theme);
+            render_live_feed(f, right[2], app, &cfg.theme);
         }
     }
 
@@ -570,11 +642,7 @@ fn parse_command(input: &str) -> (String, Vec<String>) {
     (cmd, args)
 }
 
-async fn handle_command(
-    cmd: &str,
-    args: &[String],
-    cfg: &mut TuiConfig,
-) -> CmdResult {
+async fn handle_command(cmd: &str, args: &[String], cfg: &mut TuiConfig) -> CmdResult {
     match (cmd, args) {
         ("set", [key, value, ..]) => {
             if cfg.set(key, value).is_some() {
@@ -641,7 +709,11 @@ async fn handle_command(
             cfg.gateway_host,
             cfg.gateway_port,
             cfg.llama_port,
-            if cfg.claude_enabled { "enabled" } else { "disabled" }
+            if cfg.claude_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         )),
         ("tools", []) => CmdResult::Out(
             [
@@ -661,7 +733,10 @@ async fn handle_command(
             if cmd.is_empty() {
                 CmdResult::Silent
             } else {
-                CmdResult::Out(format!("Unknown command: :{}\nType :show for config keys.", cmd))
+                CmdResult::Out(format!(
+                    "Unknown command: :{}\nType :show for config keys.",
+                    cmd
+                ))
             }
         }
     }
@@ -806,6 +881,24 @@ async fn run_tui(app: Arc<RwLock<App>>, gw: GatewayClient, mut cfg: TuiConfig) -
         a.status_msg = Some("gateway.log not found — live feed disabled".into());
     }
 
+    // Poll the gateway usage ledger for real billed-usage savings
+    {
+        let app = app.clone();
+        let gw = gw.clone();
+        tokio::spawn(async move {
+            let mut iv = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            iv.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                iv.tick().await;
+                if let Ok(v) = gw.get_stats().await {
+                    app.write().await.savings = Some(SavingsStats::from_value(&v));
+                }
+            }
+        });
+    }
+
+    let mut mouse_captured = true;
+
     let mut events = EventStream::new();
     let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -867,6 +960,27 @@ async fn run_tui(app: Arc<RwLock<App>>, gw: GatewayClient, mut cfg: TuiConfig) -
                                 a.cursor = 0;
                             } else if a.current_input.is_empty() {
                                 break 'outer;
+                            }
+                            continue;
+                        }
+                        KeyCode::Char('y') => {
+                            // Mouse capture eats click-drag, which blocks the
+                            // terminal's native text selection — toggle it off
+                            // so the user can select and copy.
+                            mouse_captured = !mouse_captured;
+                            let mut out = io::stdout();
+                            if mouse_captured {
+                                let _ = crossterm::execute!(out, EnableMouseCapture);
+                                a.status_msg = Some(
+                                    "mouse capture ON — wheel scrolls · Ctrl+Y to select/copy text"
+                                        .into(),
+                                );
+                            } else {
+                                let _ = crossterm::execute!(out, DisableMouseCapture);
+                                a.status_msg = Some(
+                                    "COPY MODE — select text with mouse, then copy · Ctrl+Y restores wheel scroll"
+                                        .into(),
+                                );
                             }
                             continue;
                         }

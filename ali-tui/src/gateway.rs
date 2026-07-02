@@ -50,6 +50,13 @@ impl GatewayClient {
         Ok(body)
     }
 
+    pub async fn get_stats(&self) -> Result<Value> {
+        let url = format!("{}/stats", self.base_url);
+        let resp = self.client.get(&url).send().await?;
+        let body: Value = resp.json().await?;
+        Ok(body)
+    }
+
     pub async fn chat(
         &self,
         messages: Vec<ChatMessage>,

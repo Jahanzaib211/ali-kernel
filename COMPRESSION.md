@@ -1,5 +1,8 @@
 # Watching Ali Kernel Compress Your Tokens (plain-English guide)
 
+> Want the hard numbers instead? **[PROOF.md](PROOF.md)** is the skeptic-proof
+> record: real billed tokens, pricing methodology, and the compression-loss FAQ.
+
 ## TL;DR
 
 - The gateway now sits **between Claude Code and Anthropic**.

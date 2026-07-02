@@ -33,6 +33,7 @@ mod router;
 mod security;
 mod tools;
 mod training;
+mod usage_ledger;
 
 use config::AliConfig as Config;
 use security::Constitutions;
@@ -52,6 +53,7 @@ struct AppState {
     journal: journal::Journal,
     intent: Arc<intent::Intent>,
     identity: Arc<identity::IdentityStore>,
+    ledger: Arc<usage_ledger::UsageLedger>,
 }
 
 #[tokio::main]
@@ -113,6 +115,9 @@ async fn main() -> anyhow::Result<()> {
         journal,
         intent: intent.clone(),
         identity: identity.clone(),
+        ledger: Arc::new(usage_ledger::UsageLedger::new(
+            config.log_dir.join("usage.jsonl"),
+        )),
     };
 
     let app = Router::new()
@@ -120,6 +125,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_handler))
         .route("/v1/messages", post(anthropic_proxy::messages_handler))
+        .route("/stats", get(usage_ledger::stats_handler))
         .route("/v1/approvals", post(approval_handler))
         .route("/v1/approvals/:request_id", get(approval_status_handler))
         .route("/benchmark", get(benchmark_handler))
