@@ -135,7 +135,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/feedback", post(feedback_handler))
         .with_state(state);
 
-    let addr = format!("127.0.0.1:{}", config.gateway_port);
+    // gateway_host defaults to 127.0.0.1; set 0.0.0.0 in config to serve
+    // Docker containers (e.g. via host.docker.internal:9000).
+    let addr = format!("{}:{}", config.gateway_host, config.gateway_port);
     info!("Ali Kernel listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
