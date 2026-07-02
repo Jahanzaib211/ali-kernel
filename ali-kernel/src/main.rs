@@ -38,6 +38,10 @@ use config::AliConfig as Config;
 use security::Constitutions;
 
 const MAX_TOOL_ROUNDS: usize = 4;
+// Single source of truth for the self-reported API version (independent of
+// Cargo.toml's package version) — /health and /benchmark had drifted out of
+// sync (2.1.0 vs a stale 1.0.0) before this was pulled into one constant.
+const GATEWAY_VERSION: &str = "2.1.0";
 
 #[derive(Clone)]
 struct AppState {
@@ -135,7 +139,7 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     let backend_ok = state.config.check_backend().await.is_ok();
     Json(json!({
         "status": "alive",
-        "version": "2.1.0",
+        "version": GATEWAY_VERSION,
         "capabilities": ["rag_memory", "agentic_tools", "crate_aware_tools",
                          "behavioral_shield", "eval_harness", "rlaif_capture"],
         "backend": if backend_ok { "healthy" } else { "unreachable" },
@@ -789,7 +793,7 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "benchmark": results,
         "model": "ornith",
-        "gateway_version": "1.0.0"
+        "gateway_version": GATEWAY_VERSION
     }))
 }
 
