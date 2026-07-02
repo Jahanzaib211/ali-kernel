@@ -1,5 +1,6 @@
 use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -82,11 +83,60 @@ pub enum AppMode {
     Error,
 }
 
+/// One line in the live event feed, parsed from gateway.log.
+#[derive(Debug, Clone)]
+pub struct LiveEvent {
+    pub ts: String,
+    pub tag: String,
+    pub text: String,
+}
+
+impl LiveEvent {
+    pub fn tag_color(&self) -> Color {
+        match self.tag.as_str() {
+            "L5.5" => Color::Magenta,
+            "L3" => Color::Cyan,
+            "L4" => Color::Blue,
+            "L5" => Color::LightBlue,
+            "L7" | "TOOL" => Color::Yellow,
+            "L8" => Color::Green,
+            "L9" => Color::LightGreen,
+            _ => Color::Gray,
+        }
+    }
+}
+
+const MAX_LIVE_EVENTS: usize = 300;
+
+/// Remove ANSI escape sequences without pulling in a regex dependency.
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for e in chars.by_ref() {
+                    if ('@'..='~').contains(&e) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
 #[derive(Debug, Clone)]
 pub struct App {
     pub messages: Vec<ChatMessage>,
     pub current_input: String,
+    /// Cursor position in `current_input`, measured in chars.
+    pub cursor: usize,
     pub input_history: Vec<String>,
+    pub history_index: Option<usize>,
     pub pending_approvals: Vec<PendingApproval>,
     pub current_request_id: Option<String>,
     pub pipeline: PipelineState,
@@ -95,6 +145,12 @@ pub struct App {
     pub streaming_content: String,
     pub is_typing: bool,
     pub connected: bool,
+    pub live_events: VecDeque<LiveEvent>,
+    /// Total chars saved by L5.5 compression since the TUI started.
+    pub saved_chars: u64,
+    pub compress_events: u64,
+    /// Transcript scroll: wrapped lines up from the bottom. 0 = follow live output.
+    pub scroll_offset: usize,
 }
 
 impl App {
@@ -102,7 +158,9 @@ impl App {
         Self {
             messages: Vec::new(),
             current_input: String::new(),
+            cursor: 0,
             input_history: Vec::new(),
+            history_index: None,
             pending_approvals: Vec::new(),
             current_request_id: None,
             pipeline: PipelineState::default(),
@@ -111,6 +169,10 @@ impl App {
             streaming_content: String::new(),
             is_typing: false,
             connected: false,
+            live_events: VecDeque::new(),
+            saved_chars: 0,
+            compress_events: 0,
+            scroll_offset: 0,
         }
     }
 
@@ -131,8 +193,8 @@ impl App {
         if !self.streaming_content.is_empty() {
             self.push_message("assistant", self.streaming_content.clone());
             self.streaming_content.clear();
-            self.is_typing = false;
         }
+        self.is_typing = false;
     }
 
     pub fn add_pending_approval(&mut self, approval: PendingApproval) {
@@ -143,6 +205,140 @@ impl App {
     pub fn clear_pending_approvals(&mut self) {
         self.pending_approvals.clear();
         self.mode = AppMode::Chat;
+    }
+
+    // --- input editing (char-boundary safe) ---
+
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.current_input
+            .char_indices()
+            .nth(char_idx)
+            .map(|(b, _)| b)
+            .unwrap_or(self.current_input.len())
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        let b = self.byte_at(self.cursor);
+        self.current_input.insert(b, c);
+        self.cursor += 1;
+    }
+
+    pub fn insert_str(&mut self, s: &str) {
+        let b = self.byte_at(self.cursor);
+        self.current_input.insert_str(b, s);
+        self.cursor += s.chars().count();
+    }
+
+    pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let b = self.byte_at(self.cursor - 1);
+        self.current_input.remove(b);
+        self.cursor -= 1;
+    }
+
+    pub fn delete_forward(&mut self) {
+        if self.cursor >= self.current_input.chars().count() {
+            return;
+        }
+        let b = self.byte_at(self.cursor);
+        self.current_input.remove(b);
+    }
+
+    pub fn cursor_left(&mut self) {
+        self.cursor = self.cursor.saturating_sub(1);
+    }
+
+    pub fn cursor_right(&mut self) {
+        let len = self.current_input.chars().count();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
+    }
+
+    pub fn cursor_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    pub fn cursor_end(&mut self) {
+        self.cursor = self.current_input.chars().count();
+    }
+
+    pub fn take_input(&mut self) -> String {
+        self.cursor = 0;
+        self.history_index = None;
+        std::mem::take(&mut self.current_input)
+    }
+
+    pub fn set_input(&mut self, s: String) {
+        self.cursor = s.chars().count();
+        self.current_input = s;
+    }
+
+    pub fn history_prev(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        let idx = match self.history_index {
+            None => self.input_history.len() - 1,
+            Some(0) => 0,
+            Some(i) => i - 1,
+        };
+        self.history_index = Some(idx);
+        self.set_input(self.input_history[idx].clone());
+    }
+
+    pub fn history_next(&mut self) {
+        match self.history_index {
+            None => {}
+            Some(i) if i + 1 < self.input_history.len() => {
+                self.history_index = Some(i + 1);
+                self.set_input(self.input_history[i + 1].clone());
+            }
+            Some(_) => {
+                self.history_index = None;
+                self.set_input(String::new());
+            }
+        }
+    }
+
+    // --- live event feed ---
+
+    /// Ingest one raw gateway.log line: strip ANSI, extract timestamp,
+    /// route PIPE lines into both the pipeline snapshot and the live feed.
+    pub fn ingest_log_line(&mut self, raw: &str) {
+        let clean = strip_ansi(raw);
+        let (payload, ts) = if let Some(pos) = clean.find("PIPE ") {
+            (&clean[pos..], extract_time(&clean))
+        } else if let Some(pos) = clean.find("Tool executed:") {
+            (&clean[pos..], extract_time(&clean))
+        } else {
+            return;
+        };
+
+        self.update_pipeline(payload);
+
+        let (tag, text) = if let Some(rest) = payload.strip_prefix("PIPE ") {
+            let mut parts = rest.splitn(2, ' ');
+            let tag = parts.next().unwrap_or("?").to_string();
+            let text = parts.next().unwrap_or("").to_string();
+            (tag, text)
+        } else {
+            ("TOOL".to_string(), payload.trim().to_string())
+        };
+
+        if tag == "L5.5" {
+            if let Some((before, after)) = parse_compression(&text) {
+                self.saved_chars += before.saturating_sub(after);
+                self.compress_events += 1;
+            }
+        }
+
+        self.live_events.push_back(LiveEvent { ts, tag, text });
+        while self.live_events.len() > MAX_LIVE_EVENTS {
+            self.live_events.pop_front();
+        }
     }
 
     pub fn update_pipeline(&mut self, line: &str) {
@@ -162,16 +358,12 @@ impl App {
             if let Some(name) = rest.strip_prefix("tool_executed name=") {
                 let parts: Vec<&str> = name.splitn(2, ' ').collect();
                 self.pipeline.l7_tool = Some(parts.first().unwrap_or(&name).to_string());
-            } else if rest.starts_with("human_gate_pending tool=") {
-                if let Some(tool) = rest.strip_prefix("human_gate_pending tool=") {
-                    let tool_name = tool.split_whitespace().next().unwrap_or(tool);
-                    self.pipeline.l7_tool = Some(tool_name.to_string());
-                }
-            } else if rest.starts_with("human_gate_approved tool=") {
-                if let Some(tool) = rest.strip_prefix("human_gate_approved tool=") {
-                    let tool_name = tool.split_whitespace().next().unwrap_or(tool);
-                    self.pipeline.l7_tool = Some(tool_name.to_string());
-                }
+            } else if let Some(tool) = rest.strip_prefix("human_gate_pending tool=") {
+                let tool_name = tool.split_whitespace().next().unwrap_or(tool);
+                self.pipeline.l7_tool = Some(tool_name.to_string());
+            } else if let Some(tool) = rest.strip_prefix("human_gate_approved tool=") {
+                let tool_name = tool.split_whitespace().next().unwrap_or(tool);
+                self.pipeline.l7_tool = Some(tool_name.to_string());
             }
         } else if let Some(detail) = line.strip_prefix("Tool executed:") {
             let parts: Vec<&str> = detail.split_whitespace().collect();
@@ -194,8 +386,77 @@ impl App {
     }
 }
 
+/// Pull "HH:MM:SS" out of a tracing timestamp like "2026-07-02T01:33:49.889064Z".
+fn extract_time(line: &str) -> String {
+    line.split('T')
+        .nth(1)
+        .and_then(|t| t.get(..8))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Parse "compressed: 51200 → 8000 chars (-84%) ..." into (before, after).
+fn parse_compression(text: &str) -> Option<(u64, u64)> {
+    let rest = text.strip_prefix("compressed:")?.trim_start();
+    let mut parts = rest.split_whitespace();
+    let before: u64 = parts.next()?.parse().ok()?;
+    let arrow = parts.next()?;
+    if arrow != "→" && arrow != "->" {
+        return None;
+    }
+    let after: u64 = parts.next()?.parse().ok()?;
+    Some((before, after))
+}
+
+/// Human-readable char count: 1234 → "1.2K", 1234567 → "1.2M".
+pub fn human_chars(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 impl Default for App {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_ansi() {
+        let s = "\x1b[2m2026-07-02T01:33:49.889064Z\x1b[0m \x1b[32m INFO\x1b[0m PIPE L5.5 x";
+        assert_eq!(strip_ansi(s), "2026-07-02T01:33:49.889064Z  INFO PIPE L5.5 x");
+    }
+
+    #[test]
+    fn ingests_compression_line() {
+        let mut app = App::new();
+        let raw = "\x1b[2m2026-07-02T01:33:49.889064Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mali_kernel::anthropic_proxy\x1b[0m\x1b[2m:\x1b[0m PIPE L5.5 compressed: 51200 → 8000 chars (-84%) [claude-proxy]";
+        app.ingest_log_line(raw);
+        assert_eq!(app.live_events.len(), 1);
+        let ev = &app.live_events[0];
+        assert_eq!(ev.tag, "L5.5");
+        assert_eq!(ev.ts, "01:33:49");
+        assert_eq!(app.saved_chars, 43200);
+        assert!(app.pipeline.l5_5_compression.is_some());
+    }
+
+    #[test]
+    fn input_editing_is_char_safe() {
+        let mut app = App::new();
+        app.insert_str("héllo");
+        app.cursor_left();
+        app.backspace();
+        assert_eq!(app.current_input, "hélo");
+        app.cursor_end();
+        app.insert_char('!');
+        assert_eq!(app.current_input, "hélo!");
     }
 }
