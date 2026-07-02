@@ -157,3 +157,130 @@ cargo clippy --all-targets -- -D warnings  # any code-quality complaints?
 ```
 
 If all three come back clean, the project is in a good state.
+
+---
+
+## Part 6 — Panic page / quick reference
+
+_The commands you keep copy-pasting, all in one place. If something is broken, scroll to "If X then Y" first._
+
+### Restart everything (the most common move)
+
+```bash
+# 1. Kill the TUI (it doesn't auto-reconnect — it gets wedged when the gateway dies)
+pkill -f "target/release/ali-tui"
+
+# 2. Bounce the gateway service
+sudo systemctl restart ali-kernel
+
+# 3. Bring the TUI back
+nohup ~/ali-kernel/target/release/ali-tui >/dev/null 2>&1 &
+disown
+```
+
+You should see the gateway come back within a second or two. If it doesn't, jump to "If X then Y" below.
+
+### After a rebuild (cargo build --release)
+
+The gateway seals its own hash on first run (`/tmp/ali-ram-moat/`). A rebuild changes the binary, so the next start refuses with `FATAL: Binary tampered!`. Always do this sequence after rebuilding:
+
+```bash
+cd ~/ali-kernel
+cargo build --release
+rm -rf /tmp/ali-ram-moat          # let the new binary reseal on next start
+sudo systemctl restart ali-kernel
+~/ali-kernel/target/release/ali-tui &   # relaunch TUI if you had it open
+```
+
+**Don't** skip the `rm -rf`. **Don't** expect a running gateway to pick up a new binary on its own — it has to actually restart.
+
+### Is it actually working?
+
+```bash
+curl -s http://127.0.0.1:9000/health          # gateway alive?
+systemctl status ali-kernel --no-pager       # service state + last few errors
+pgrep -af "ali-kernel|ali-tui|llama-server"  # what's actually running, with PIDs
+```
+
+A healthy gateway returns JSON like `{"status":"alive","version":"2.1.0","backend":"healthy",...}`.
+
+### Watch compression live
+
+```bash
+# Just the squeeze lines (what you actually want to see)
+tail -F ~/ali-kernel/logs/gateway.log | grep --line-buffered "L5.5 compressed"
+
+# Everything (full pipeline trace — noisier)
+tail -F ~/ali-kernel/logs/gateway.log
+```
+
+Each line is `before → after (-X%) [which-path]`. Example:
+```
+PIPE L5.5 compressed: 50289 → 12373 chars (-76%) [claude-proxy]
+```
+That `-76%` is what saved you tokens.
+
+> **Heads up:** the TUI uses `/v1/chat/completions` (OpenAI format), which only fires the older
+> "big text → small text" compression. The **new** paths (system-as-array, tool_result blocks)
+> only fire on `/v1/messages` traffic — i.e. **Claude Code sessions in this repo**. Watch the
+> log while you use Claude Code here, not while using the TUI.
+
+### How much have we saved?
+
+```bash
+# All-time squeeze count
+grep -c "L5.5 compressed" ~/ali-kernel/logs/gateway.log
+
+# Last 20 squeezes with their savings
+grep "L5.5 compressed" ~/ali-kernel/logs/gateway.log | tail -20
+
+# Today's only
+grep "$(date +%Y-%m-%d)" ~/ali-kernel/logs/gateway.log | grep "L5.5 compressed"
+```
+
+### If X then Y (the part to scroll to when something is broken)
+
+| Symptom | Fix |
+|---|---|
+| Gateway won't start, journal says `Binary tampered!` | `rm -rf /tmp/ali-ram-moat && sudo systemctl restart ali-kernel` |
+| `curl 127.0.0.1:9000/health` → Connection refused | `systemctl status ali-kernel` — if it's "activating (auto-restart)" in a loop, see the row above |
+| TUI shows "error sending request to URL" | `pkill -f target/release/ali-tui` then relaunch — it doesn't auto-reconnect |
+| Gateway up but replies are wrong / empty | Check `llama-server` is alive: `systemctl status llama-server`, or `curl 127.0.0.1:8081/v1/models` |
+| `sudo systemctl` asks for password | The previous sudo session expired. Enter it once; lasts 15 min by default. |
+| Nothing in the log | Check you're tailing the right file: `ls -la ~/ali-kernel/logs/gateway.log` |
+| "Permission denied" running the binary by hand | Run it from `~/ali-kernel/` (the systemd unit sets `WorkingDirectory=`; your shell doesn't). Or use `sudo systemctl restart ali-kernel` instead. |
+
+### Where things live
+
+| Thing | Path |
+|---|---|
+| Gateway log (live) | `~/ali-kernel/logs/gateway.log` |
+| Model log (live) | `~/ali-kernel/logs/llama-server.log` |
+| Gateway binary | `~/ali-kernel/target/release/ali-kernel` |
+| TUI binary | `~/ali-kernel/target/release/ali-tui` |
+| Service unit | `/etc/systemd/system/ali-kernel.service` |
+| Attestation moat | `/tmp/ali-ram-moat/` (delete after rebuilds) |
+| Env vars (`ANTHROPIC_BASE_URL`, etc.) | `~/.bashrc` |
+| Capture data (SFT/DPO) | `~/ali-kernel/training/` |
+
+### Service commands (memorize this row)
+
+```bash
+sudo systemctl status ali-kernel      # what's it doing + last log lines
+sudo systemctl restart ali-kernel     # bounce it
+sudo journalctl -u ali-kernel -n 50   # last 50 journal lines (no sudo needed if you're in `adm` group)
+sudo journalctl -u ali-kernel -f      # follow live, like tail -f
+```
+
+### Nuclear option (everything wedged)
+
+```bash
+pkill -9 -f "target/release/(ali-kernel|ali-tui)"
+sudo systemctl restart ali-kernel llama-server
+sleep 2
+nohup ~/ali-kernel/target/release/ali-tui >/dev/null 2>&1 &
+disown
+curl -s http://127.0.0.1:9000/health
+```
+
+If `health` still fails after this, paste the output of `sudo journalctl -u ali-kernel -n 30` — that's the thing that says *why*.

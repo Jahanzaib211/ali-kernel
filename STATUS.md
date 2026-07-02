@@ -1,6 +1,58 @@
 # Ali Kernel — Live Status
 
-_Last updated: 2026-07-02 (session: security hardening + code-quality pass)_
+_Last updated: 2026-07-02 (session: TUI keyboard fix + Anthropic proxy compression gaps)_
+
+## 2026-07-02 update (later session) — TUI rebuild + Anthropic proxy compression
+
+Two real compression gaps found in `src/anthropic_proxy.rs` and fixed:
+
+- **System as an array was never compressed** — only the plain-string form was. Claude Code
+  actually sends `system` as an array of blocks (most with `cache_control` for prompt caching).
+  Each block's text is now compressed in place; `cache_control` and block structure are
+  preserved so the upstream cache still hits. Verified by a regression test
+  (`system_array_blocks_compressed_cache_control_kept`) that asserts `cache_control` survives.
+- **`tool_result` blocks were never compressed** — only `type:"text"` blocks. Tool results (file
+  reads, build logs, anything L7 executed) are the largest payloads in a coding session; now
+  both the string-content form and the nested-block-array form are squeezed, with `tool_use_id`
+  and non-text blocks left alone. Two regression tests added.
+
+Other work this session:
+
+- **TUI keyboard rewrite** (`~/ali-kernel/ali-tui/`). Three real bugs: `a`/`d` were swallowed by
+  the approval-mode match arm (broke typing and `:save`/`:load` colon commands); press+release
+  key events typed twice; the blocking `event::poll` loop starved the render loop during streaming.
+  Replaced with crossterm `EventStream` + `tokio::select!` + 100 ms render tick; key events now
+  filtered to `Press | Repeat` only. Bonus fixes: `/clear` and `/retry` no longer quit (their
+  `None` returns were treated as exit), paste is handled, multibyte-safe message truncation
+  (the old 200-byte cut could panic on UTF-8), approving/denying removes from the approval queue.
+- **Live feed tailer rewrite** — the old tailer checked `starts_with("PIPE ")` but every log line
+  starts with ANSI color codes + an ISO timestamp, so the pipeline panel had been dead since
+  day one. New tailer strips ANSI, seeks to end-of-file on start, survives log rotation, buffers
+  partial lines. Live feed now drives the right-column scrolling pane; status bar shows running
+  L5.5 totals ("saved 1.2M chars in 43 squeezes").
+- **61 tests pass across the workspace (7 new).** `cargo build --workspace` clean.
+
+**The one operational gotcha bit again** — `/tmp/ali-ram-moat/` was sealed against the previous
+binary's hash, every rebuild tripped the attestation refusal, the gateway crash-looped on
+`FATAL: Binary tampered!` until the moat was cleared and systemd restarted. Worth folding the
+clear-and-restart step into any future build automation so this stops being manual.
+
+**Verification:** synthetic `/v1/messages` POST with `system` as a 2-block array (one with
+`cache_control`) plus a `tool_result` block of 25 kB text — gateway log:
+`PIPE L5.5 compressed: 50289 → 12373 chars (-76%) [claude-proxy]`.
+Without the new code that payload would have left the `tool_result` untouched; the -76% ratio
+proves both new paths fired.
+
+**Still uncommitted and unmerged.** Owner to confirm before `git push`.
+
+Outstanding ideas from this session's audit (rough value order):
+
+1. `/stats` endpoint on the gateway so the TUI reads totals directly instead of log-scraping.
+2. Skip compression on the *newest* `tool_result` (head+tail truncation of the current turn's
+   file read can drop the part Claude actually needs).
+3. `logrotate` config for `gateway.log` (was 922 kB and growing fast).
+4. Replace the manual `rm -rf /tmp/ali-ram-moat && sudo systemctl restart ali-kernel` ritual
+   with something the build script does automatically.
 
 ## 2026-07-02 update — security review + hardening
 
