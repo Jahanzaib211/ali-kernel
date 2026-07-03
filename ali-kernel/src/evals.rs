@@ -52,12 +52,40 @@ pub fn load_suite(config: &Config) -> Result<Vec<EvalTask>> {
     Ok(tasks)
 }
 
+/// Public cap used by both the function and the HTTP handler so they stay
+/// in lock-step. Anything beyond this is silently clamped.
+pub const MAX_LIMIT: usize = 20;
+
 pub async fn run_suite(
     client: &Client,
     config: &Config,
     constitutions: &Constitutions,
 ) -> Result<EvalReport> {
-    let tasks = load_suite(config)?;
+    run_suite_with_limit(client, config, constitutions, None).await
+}
+
+/// Run a bounded subset of the suite. `limit = None` runs everything; `Some(n)`
+/// runs the first `n` tasks. Anything beyond `MAX_LIMIT` is clamped to
+/// `MAX_LIMIT` so a caller cannot accidentally trigger an unbounded run via
+/// the HTTP endpoint.
+pub async fn run_suite_with_limit(
+    client: &Client,
+    config: &Config,
+    constitutions: &Constitutions,
+    limit: Option<usize>,
+) -> Result<EvalReport> {
+    let effective_limit = limit
+        .map(|n| n.min(MAX_LIMIT))
+        .unwrap_or(MAX_LIMIT);
+
+    let all_tasks = load_suite(config)?;
+    let tasks: Vec<EvalTask> = all_tasks.into_iter().take(effective_limit).collect();
+    if tasks.is_empty() {
+        return Err(anyhow::anyhow!(
+            "no eval tasks loaded from {}; check that the suite file exists",
+            config.evals_dir.join("suite.json").display()
+        ));
+    }
     let mut results: Vec<TaskResult> = Vec::new();
     let mut domain_totals: BTreeMap<String, (u32, u32)> = BTreeMap::new();
     let mut raw_score = 0u32;

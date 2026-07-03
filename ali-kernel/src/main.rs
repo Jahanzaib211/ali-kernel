@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::State,
+    extract::{Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -9,7 +9,7 @@ use axum::{
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 use tracing::info;
 use uuid::Uuid;
@@ -31,6 +31,8 @@ mod logging;
 mod memory;
 mod router;
 mod security;
+mod session;
+mod handshake;
 mod tools;
 mod training;
 mod usage_ledger;
@@ -43,6 +45,13 @@ const MAX_TOOL_ROUNDS: usize = 4;
 // Cargo.toml's package version) — /health and /benchmark had drifted out of
 // sync (2.1.0 vs a stale 1.0.0) before this was pulled into one constant.
 const GATEWAY_VERSION: &str = "2.1.0";
+
+#[derive(Debug, serde::Deserialize, Default)]
+struct EvalParams {
+    /// Cap on the number of tasks run. `None` falls back to the handler default.
+    /// Clamped server-side to `evals::MAX_LIMIT` (20).
+    limit: Option<usize>,
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -124,6 +133,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/v1/handshake", get(handshake_handler))
+        .route("/v1/session", post(session_handler))
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_handler))
         .route("/v1/messages", post(anthropic_proxy::messages_handler))
@@ -171,6 +182,99 @@ async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
+/// GET /v1/handshake — discovery manifest. No auth required.
+async fn handshake_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(handshake::manifest(&state.config))
+}
+
+/// POST /v1/session — mint a short-lived JWT scoped to a tool mode and feature list.
+async fn session_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    // Best-effort: validate an existing JWT, but issuance is allowed without one.
+    let key = match crate::session::resolve_signing_key(&state.config) {
+        Some(k) => k,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "session_keys_unset",
+                    "message":
+                        "Set ALI_SESSION_KEY (preferred) or OH_SECRET_KEY in the environment \
+                         before requesting a session token. To enable a development fallback \
+                         key, set [dev_insecure_auth_ok] = true in your .ali.toml."
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let req: handshake::SessionRequest = match serde_json::from_value(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "bad_request",
+                    "message": e.to_string(),
+                    "schema": {
+                        "tool_mode": "passthrough | native | hybrid (optional; default = config passthrough_tools or native)",
+                        "ttl_secs":  "60..86400 (optional; default = 3600)",
+                        "features":  "array<feature-name> (optional; default = all)"
+                    }
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let ttl = crate::session::clamp_ttl(req.ttl_secs.unwrap_or(crate::session::default_ttl()));
+    let now = chrono::Utc::now().timestamp();
+    let exp = now + ttl;
+    let resolved = handshake::resolve_request(&state.config, &headers);
+    let tool_mode = req.tool_mode.unwrap_or(resolved.tool_mode);
+    let features = req.features.unwrap_or_else(|| {
+        vec![
+            "rag_memory".into(),
+            "behavioral_shield".into(),
+            "agentic_tools".into(),
+            "crate_aware_tools".into(),
+            "streaming".into(),
+            "long_ctx_l55".into(),
+        ]
+    });
+    let claims = crate::session::SessionClaims {
+        sub: Uuid::new_v4().to_string(),
+        tool_mode,
+        features: features.clone(),
+        exp,
+        iat: now,
+        jti: Uuid::new_v4().to_string(),
+    };
+
+    let token = match crate::session::encode_session(&claims, &key) {
+        Ok(t) => t,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "encode_failed", "message": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+
+    Json(handshake::SessionResponse {
+        session_token: token,
+        expires_at: chrono::DateTime::<chrono::Utc>::from_timestamp(exp, 0)
+            .unwrap_or_else(chrono::Utc::now),
+        tool_mode,
+        features,
+    })
+    .into_response()
+}
+
 async fn chat_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -178,6 +282,11 @@ async fn chat_handler(
 ) -> Response {
     let request_id = Uuid::new_v4().to_string();
     let start = Instant::now();
+
+    // Resolve per-request tool mode + session BEFORE the L3 routing decision so
+    // the constitution layer, system prompt, and tool merge are all consistent
+    // with the same mode.
+    let resolved = handshake::resolve_request(&state.config, &headers);
 
     let messages = match body.get("messages").and_then(|m| m.as_array()) {
         Some(m) if !m.is_empty() => m.clone(),
@@ -254,18 +363,37 @@ async fn chat_handler(
         &messages,
         state.intent.clone(),
         state.identity.clone(),
+        resolved.tool_mode,
     )
     .await;
     let assembled_for_loop = assembled.clone();
     tracing::info!("PIPE L5 messages={}", assembled.len());
 
-    // Build extra fields (tools, tool_choice, etc.)
-    let mut extra = json!({});
-    if let Some(tools) = body.get("tools") {
-        extra["tools"] = tools.clone();
-    }
-    if let Some(tc) = body.get("tool_choice") {
-        extra["tool_choice"] = tc.clone();
+    // Build extra fields (tools, tool_choice, etc.) honouring the resolved
+    // tool mode: passthrough (caller wins), native (gateway wins), hybrid (merged).
+    let user_tools = body.get("tools");
+    let user_choice = body.get("tool_choice");
+    let merged = handshake::merge_tools(
+        resolved.tool_mode,
+        user_tools,
+        user_choice,
+    );
+    let extra = if let Value::Object(map) = merged {
+        Value::Object(map)
+    } else {
+        json!({})
+    };
+    tracing::info!(
+        "tool_mode={:?} disabled_features={:?}",
+        resolved.tool_mode,
+        resolved.disabled_features,
+    );
+    if let Some(ref session) = resolved.session {
+        tracing::info!(
+            "session_sub={} jti={}",
+            session.sub,
+            session.jti,
+        );
     }
 
     // L6: Brain inference
@@ -778,6 +906,7 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
             &messages,
             state.intent.clone(),
             state.identity.clone(),
+            crate::session::ToolMode::Native,
         )
         .await;
 
@@ -807,15 +936,62 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
     }))
 }
 
-/// GET /eval — run the 20-task benchmark, self-grade, persist score. The proof engine.
-async fn eval_handler(State(state): State<AppState>) -> Response {
-    match evals::run_suite(&state.client, &state.config, &state.constitutions).await {
-        Ok(report) => Json(json!(serde_json::to_value(&report).unwrap())).into_response(),
-        Err(e) => {
+/// GET /eval — run the benchmark, self-grade, persist score. The proof engine.
+///
+/// Returns a JSON envelope within `EVAL_TIMEOUT_SECS`:
+///   200 + the report on success,
+///   408 + `{"error":"timeout", …}` if the suite stalls,
+///   500 + `{"error":…}` on internal failure.
+/// Optional query params: `?limit=N` clamps the number of tasks run (default 5,
+/// max 20). Smaller N → faster response, fewer scores. Useful for `/health`-style
+/// smoke runs.
+async fn eval_handler(
+    State(state): State<AppState>,
+    Query(params): Query<EvalParams>,
+) -> Response {
+    const EVAL_TIMEOUT_SECS: u64 = 60;
+    let limit = params.limit.unwrap_or(5);
+    let limit = limit.clamp(1, evals::MAX_LIMIT);
+
+    let client = state.client.clone();
+    let config = state.config.clone();
+    let constitutions = state.constitutions.clone();
+    let fut = tokio::spawn(async move {
+        evals::run_suite_with_limit(&client, &config, &constitutions, Some(limit)).await
+    });
+
+    match tokio::time::timeout(Duration::from_secs(EVAL_TIMEOUT_SECS), fut).await {
+        Ok(Ok(Ok(report))) => {
+            Json(json!(serde_json::to_value(&report).unwrap())).into_response()
+        }
+        Ok(Ok(Err(e))) => {
             tracing::error!("Eval failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})),
+                Json(json!({"error": "evals_failed", "message": e.to_string()})),
+            )
+                .into_response()
+        }
+        Ok(Err(join_err)) => {
+            tracing::error!("Eval task panicked: {join_err}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "evals_panicked", "message": join_err.to_string()})),
+            )
+                .into_response()
+        }
+        Err(_elapsed) => {
+            tracing::warn!("Eval exceeded {EVAL_TIMEOUT_SECS}s budget; returning 408");
+            (
+                StatusCode::REQUEST_TIMEOUT,
+                Json(json!({
+                    "error": "timeout",
+                    "message": format!(
+                        "eval suite did not complete within {EVAL_TIMEOUT_SECS}s; \
+                         partial results discarded. Re-run with a leaner suite or longer budget."
+                    ),
+                    "timeout_secs": EVAL_TIMEOUT_SECS,
+                })),
             )
                 .into_response()
         }

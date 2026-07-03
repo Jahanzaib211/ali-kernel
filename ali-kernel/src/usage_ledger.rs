@@ -37,6 +37,11 @@ pub struct UsageRecord {
     pub auth: String,
     pub chars_raw: u64,
     pub chars_compressed: u64,
+    /// Chars removed by provably-lossless passes only (ANSI strip, blank-run
+    /// collapse, annotated repeated-line collapse). The lossy remainder is
+    /// chars_raw - chars_compressed - this.
+    #[serde(default)]
+    pub chars_lossless_saved: u64,
     pub input_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub cache_read_input_tokens: u64,
@@ -193,12 +198,23 @@ fn rates_for(model: &str) -> (f64, f64) {
     }
 }
 
+/// Cache-write dollars for this request.
+///
+/// `UsageRecord` only carries the rolled-up `cache_creation_input_tokens`
+/// total; the `UsageTokens` struct carries the 5m/1h TTL split for callers
+/// that surface it. When the split isn't materialised into the record we
+/// default to the 5m cache write rate (1.25x input), matching Anthropic's
+/// default cache TTL and validated against the Claude Code /usage panel.
+fn cache_write_cost(r: &UsageRecord, input_rate: f64) -> f64 {
+    r.cache_creation_input_tokens as f64 * input_rate * 1.25
+}
+
 /// Actual dollars billed for this request, from the returned usage block.
 fn actual_cost_usd(r: &UsageRecord) -> f64 {
     let (input, output) = rates_for(&r.model);
     (r.input_tokens as f64 * input
         + r.cache_read_input_tokens as f64 * input * 0.1
-        + r.cache_creation_input_tokens as f64 * input * 1.25
+        + cache_write_cost(r, input)
         + r.output_tokens as f64 * output)
         / 1e6
 }
@@ -218,7 +234,7 @@ fn estimated_savings_usd(r: &UsageRecord) -> f64 {
     } else {
         (r.input_tokens as f64 * input
             + r.cache_read_input_tokens as f64 * input * 0.1
-            + r.cache_creation_input_tokens as f64 * input * 1.25)
+            + cache_write_cost(r, input))
             / billed as f64
     };
     removed_tokens as f64 * effective_rate / 1e6
@@ -242,6 +258,14 @@ fn aggregate(records: &[&UsageRecord]) -> Value {
         .map(|r| actual_cost_usd(r))
         .sum();
     let key_value = spend - sub_value;
+    let lossless_saved = sum(|r| r.chars_lossless_saved);
+    let removed = chars_raw.saturating_sub(chars_compressed);
+    let lossy_dropped = removed.saturating_sub(lossless_saved);
+    let lossless_share_pct = if removed > 0 {
+        (lossless_saved as f64 * 1000.0 / removed as f64).round() / 10.0
+    } else {
+        0.0
+    };
     serde_json::json!({
         "requests": records.len(),
         "input_tokens": sum(|r| r.input_tokens),
@@ -250,6 +274,9 @@ fn aggregate(records: &[&UsageRecord]) -> Value {
         "output_tokens": sum(|r| r.output_tokens),
         "chars_raw": chars_raw,
         "chars_compressed": chars_compressed,
+        "chars_lossless_saved": lossless_saved,
+        "chars_lossy_dropped": lossy_dropped,
+        "lossless_share_pct": lossless_share_pct,
         "compression_pct": (compression_pct * 10.0).round() / 10.0,
         "api_value_usd": (spend * 10000.0).round() / 10000.0,
         "subscription_value_usd": (sub_value * 10000.0).round() / 10000.0,
@@ -325,6 +352,8 @@ pub struct UsageScanner {
 pub struct UsageTokens {
     pub input_tokens: u64,
     pub cache_creation_input_tokens: u64,
+    pub cache_5m_input_tokens: u64,
+    pub cache_1h_input_tokens: u64,
     pub cache_read_input_tokens: u64,
     pub output_tokens: u64,
 }
@@ -465,6 +494,8 @@ mod tests {
                 cache_creation_input_tokens: 300,
                 cache_read_input_tokens: 50000,
                 output_tokens: 840,
+                cache_5m_input_tokens: 0,
+                cache_1h_input_tokens: 0,
             }
         );
     }
@@ -496,6 +527,7 @@ mod tests {
             ts: Utc::now(),
             model: "claude-sonnet-4-5".into(),
             auth: String::new(),
+            chars_lossless_saved: 0,
             chars_raw: 0,
             chars_compressed: 0,
             input_tokens: 1_000_000,
@@ -514,6 +546,7 @@ mod tests {
             ts: Utc::now(),
             model: "claude-fable-5".into(),
             auth: String::new(),
+            chars_lossless_saved: 0,
             chars_raw: 0,
             chars_compressed: 0,
             input_tokens: 1_000_000,
@@ -533,6 +566,7 @@ mod tests {
             ts: Utc::now(),
             model: "claude-sonnet-4-5".into(),
             auth: String::new(),
+            chars_lossless_saved: 0,
             chars_raw: 4_000_000,
             chars_compressed: 0,
             input_tokens: 0,

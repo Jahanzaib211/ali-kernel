@@ -38,25 +38,52 @@ const SALIENT_FRACTION: usize = 8; // budget / 8
 const MINE_RECORD_CAP: usize = 16 * 1024;
 const MINE_FILE_CAP: u64 = 200 * 1024 * 1024;
 
-/// Lossless-only pass: strips ANSI escapes and collapses blank-line runs,
-/// never truncates. Safe to apply to tool outputs of any size — the model
-/// loses zero information, only formatting bytes.
+/// Char counts through one observation's pipeline, so the ledger can split
+/// savings into provably-lossless vs lossy buckets.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SqueezeStats {
+    /// Original size of blocks the compressor looked at.
+    pub raw: u64,
+    /// Size after lossless-only passes (ANSI, blank runs, repeated lines).
+    pub lossless: u64,
+    /// Size actually forwarded (after truncation, if any).
+    pub sent: u64,
+}
+
+/// Lossless-only pass: strips ANSI escapes, collapses blank-line runs, and
+/// collapses runs of identical lines (annotated with the repeat count so no
+/// information is lost). Never truncates. Safe on tool outputs of any size.
 pub fn compress_lossless(s: &str) -> String {
     let stripped = strip_ansi(s);
-    collapse_blank_lines(&stripped)
+    let collapsed = collapse_blank_lines(&stripped);
+    collapse_repeated_lines(&collapsed)
 }
 
 /// Compress one observation string to roughly `budget` chars.
 pub fn compress_observation(s: &str, budget: usize) -> String {
-    let stripped = strip_ansi(s);
-    let collapsed = collapse_blank_lines(&stripped);
-    let out = smart_truncate(&collapsed, budget);
+    compress_observation_with(s, budget, &mut SqueezeStats::default())
+}
+
+/// Same as `compress_observation`, accumulating pipeline sizes into `stats`
+/// so callers can report lossless vs lossy savings separately.
+pub fn compress_observation_with(s: &str, budget: usize, stats: &mut SqueezeStats) -> String {
+    let lossless = compress_lossless(s);
+    let out = smart_truncate(&lossless, budget);
     // Min-win guard: <10% shrink isn't worth injecting a truncation marker.
-    if out.len() * 10 > s.len() * 9 {
+    let out = if out.len() * 10 > s.len() * 9 {
         s.to_string()
     } else {
         out
+    };
+    stats.raw += s.len() as u64;
+    if out == s {
+        // Guard fired — nothing was applied.
+        stats.lossless += s.len() as u64;
+    } else {
+        stats.lossless += lossless.len().min(s.len()) as u64;
     }
+    stats.sent += out.len() as u64;
+    out
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -77,6 +104,38 @@ fn collapse_blank_lines(s: &str) -> String {
         .map(|l| l.trim_end())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Collapse runs of >=3 identical lines into the line plus an explicit repeat
+/// annotation — build logs and progress spam collapse dramatically, and the
+/// count annotation means zero information is lost.
+fn collapse_repeated_lines(s: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut run: Option<(&str, usize)> = None;
+    let flush = |out: &mut Vec<String>, line: &str, count: usize| {
+        if count >= 3 {
+            out.push(line.to_string());
+            out.push(format!("…[line repeated {} more times]", count - 1));
+        } else {
+            for _ in 0..count {
+                out.push(line.to_string());
+            }
+        }
+    };
+    for line in s.lines() {
+        match run {
+            Some((prev, count)) if prev == line => run = Some((prev, count + 1)),
+            Some((prev, count)) => {
+                flush(&mut out, prev, count);
+                run = Some((line, 1));
+            }
+            None => run = Some((line, 1)),
+        }
+    }
+    if let Some((prev, count)) = run {
+        flush(&mut out, prev, count);
+    }
+    out.join("\n")
 }
 
 /// Keep head (2/3) + tail (1/3) when over budget — the payload (an error, a
@@ -229,6 +288,35 @@ mod tests {
         assert!(out.contains("error[E0308]: mismatched types in the middle"));
         // and stays near budget (salient adds at most budget/8 + markers)
         assert!(out.len() < 2000 + 2000 / 8 + 200, "len {}", out.len());
+    }
+
+    #[test]
+    fn repeated_lines_collapse_with_count() {
+        let s = "start\nsame line\nsame line\nsame line\nsame line\nend";
+        let out = compress_lossless(s);
+        assert!(out.contains("same line\n…[line repeated 3 more times]"));
+        assert!(out.starts_with("start"));
+        assert!(out.ends_with("end"));
+        // pairs are left alone — collapsing needs >=3
+        let pair = "a\na\nb";
+        assert_eq!(compress_lossless(pair), pair);
+    }
+
+    #[test]
+    fn squeeze_stats_split_lossless_and_lossy() {
+        // 6000 chars of unique lines + heavy ANSI noise, budget 2000:
+        // ANSI strip is lossless, truncation is lossy — both must be counted.
+        let mut s = String::new();
+        for i in 0..300 {
+            s.push_str(&format!("\x1b[31mline {i} with some content\x1b[0m\n"));
+        }
+        let mut st = SqueezeStats::default();
+        let out = compress_observation_with(&s, 2000, &mut st);
+        assert_eq!(st.raw, s.len() as u64);
+        assert_eq!(st.sent, out.len() as u64);
+        // lossless stage sits strictly between raw and sent
+        assert!(st.lossless < st.raw, "ANSI strip must count as lossless");
+        assert!(st.sent < st.lossless, "truncation must count as lossy");
     }
 
     #[test]

@@ -115,6 +115,21 @@ pub struct AliConfig {
     pub denied_tools: Vec<String>,
     #[serde(default = "default_rate_limit")]
     pub rate_limit_per_minute: u32,
+    /// When true, the gateway defaults to `ToolMode::Passthrough` (caller's
+    /// tools[] + tool_choice pass through verbatim; gateway native tool set
+    /// suppressed). Per-request `X-Ali-Tool-Mode` header still wins.
+    #[serde(default)]
+    pub passthrough_tools: bool,
+    /// Opt-in development escape hatch. When true AND neither `ALI_SESSION_KEY`
+    /// nor `OH_SECRET_KEY` is set, the gateway mints and validates session JWTs
+    /// using a known, fixed development key. **Never enable in any context that
+    /// accepts network traffic from outside `127.0.0.1`.**
+    #[serde(default)]
+    pub dev_insecure_auth_ok: bool,
+    /// Default `max_tokens` used by `/v1/handshake` and `/feedback` when no
+    /// explicit limit is requested.
+    #[serde(default = "default_max_tokens_default")]
+    pub max_tokens_default: u64,
 
     // ─── System ──────────────────────────────────────────────────────────────
     pub log_dir: PathBuf,
@@ -228,6 +243,9 @@ fn default_ali_dir() -> PathBuf {
 }
 fn default_rate_limit() -> u32 {
     60
+}
+fn default_max_tokens_default() -> u64 {
+    1024
 }
 fn default_log_level() -> String {
     "info".into()
@@ -348,6 +366,25 @@ impl SystemIdentity {
     }
 }
 
+/// Public, stable name list for the gateway's native tool set.
+/// Used by `handshake::manifest` and `handshake::merge_tools`.
+pub fn default_enabled_tool_names() -> Vec<String> {
+    vec![
+        "read_file".into(),
+        "write_file".into(),
+        "bash_exec".into(),
+        "crate_search".into(),
+        "docs_lookup".into(),
+        "cargo_new".into(),
+        "cargo_add".into(),
+        "cargo_build".into(),
+        "cargo_check".into(),
+        "cargo_test".into(),
+        "cargo_clippy".into(),
+        "write_project_file".into(),
+    ]
+}
+
 // ─── Layer 5: Build-time defaults ────────────────────────────────────────────────
 
 fn build_defaults() -> AliConfig {
@@ -410,6 +447,9 @@ fn build_defaults() -> AliConfig {
         allowed_tools: vec![],
         denied_tools: vec![],
         rate_limit_per_minute: default_rate_limit(),
+        passthrough_tools: default_false(),
+        dev_insecure_auth_ok: default_false(),
+        max_tokens_default: default_max_tokens_default(),
         // System
         log_dir: PathBuf::from("logs"),
         log_level: default_log_level(),

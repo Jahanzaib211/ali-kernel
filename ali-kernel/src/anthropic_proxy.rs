@@ -50,10 +50,11 @@ pub async fn messages_handler(
         .to_string();
 
     // Compress system prompt (often enormous — CLAUDE.md, rules, etc.)
-    compress_system(&mut body);
+    let mut squeeze = compress::SqueezeStats::default();
+    compress_system(&mut body, &mut squeeze);
 
     // Compress large message content blocks
-    compress_messages(&mut body);
+    compress_messages(&mut body, &mut squeeze);
 
     let after = serialized_size(&body);
     let pct = after
@@ -159,6 +160,7 @@ pub async fn messages_handler(
                 auth: auth_kind.to_string(),
                 chars_raw: before as u64,
                 chars_compressed: after as u64,
+                chars_lossless_saved: squeeze.raw.saturating_sub(squeeze.lossless),
                 input_tokens: scanner.usage.input_tokens,
                 cache_creation_input_tokens: scanner.usage.cache_creation_input_tokens,
                 cache_read_input_tokens: scanner.usage.cache_read_input_tokens,
@@ -172,18 +174,18 @@ pub async fn messages_handler(
         .unwrap_or_else(|_| error_response(StatusCode::INTERNAL_SERVER_ERROR, "body build failed"))
 }
 
-fn compress_system(body: &mut Value) {
+fn compress_system(body: &mut Value, sq: &mut compress::SqueezeStats) {
     match body.get_mut("system") {
         // Legacy string form
         Some(Value::String(s)) if s.len() > SYSTEM_BUDGET => {
-            let compressed = compress::compress_observation(s, SYSTEM_BUDGET);
+            let compressed = compress::compress_observation_with(s, SYSTEM_BUDGET, sq);
             body["system"] = Value::String(compressed);
         }
         // Claude Code sends an array of blocks, each possibly carrying
         // cache_control — compress text in place, keep block structure intact.
         Some(Value::Array(blocks)) => {
             for block in blocks.iter_mut() {
-                compress_text_field(block, "text", SYSTEM_BUDGET);
+                compress_text_field(block, "text", SYSTEM_BUDGET, sq);
             }
         }
         _ => {}
@@ -192,16 +194,16 @@ fn compress_system(body: &mut Value) {
 
 /// Compress `obj[key]` in place when it's a string over `budget`. Other keys
 /// (cache_control, type, …) are untouched so prompt caching keeps working.
-fn compress_text_field(obj: &mut Value, key: &str, budget: usize) {
+fn compress_text_field(obj: &mut Value, key: &str, budget: usize, sq: &mut compress::SqueezeStats) {
     if let Some(text) = obj.get(key).and_then(|t| t.as_str()) {
         if text.len() > budget {
-            let compressed = compress::compress_observation(text, budget);
+            let compressed = compress::compress_observation_with(text, budget, sq);
             obj[key] = Value::String(compressed);
         }
     }
 }
 
-fn compress_messages(body: &mut Value) {
+fn compress_messages(body: &mut Value, sq: &mut compress::SqueezeStats) {
     let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
         return;
     };
@@ -209,7 +211,7 @@ fn compress_messages(body: &mut Value) {
         // Simple string content
         if let Some(text) = msg.get("content").and_then(|c| c.as_str()) {
             if text.len() > MSG_BUDGET {
-                let compressed = compress::compress_observation(text, MSG_BUDGET);
+                let compressed = compress::compress_observation_with(text, MSG_BUDGET, sq);
                 msg["content"] = Value::String(compressed);
             }
             continue;
@@ -217,7 +219,7 @@ fn compress_messages(body: &mut Value) {
         // Array content blocks (tool results, multi-part)
         if let Some(blocks) = msg.get_mut("content").and_then(|c| c.as_array_mut()) {
             for block in blocks.iter_mut() {
-                compress_block(block);
+                compress_block(block, sq);
             }
         }
     }
@@ -226,17 +228,17 @@ fn compress_messages(body: &mut Value) {
 /// Compress one content block. `text` blocks carry a plain string; `tool_result`
 /// blocks nest either a string or another block array — in coding sessions those
 /// are the largest payloads (file reads, build logs).
-fn compress_block(block: &mut Value) {
+fn compress_block(block: &mut Value, sq: &mut compress::SqueezeStats) {
     match block.get("type").and_then(|t| t.as_str()) {
-        Some("text") => compress_text_field(block, "text", MSG_BUDGET),
+        Some("text") => compress_text_field(block, "text", MSG_BUDGET, sq),
         Some("tool_result") => match block.get_mut("content") {
             Some(Value::String(s)) => {
                 // Tool outputs get the lossless pass (ANSI, blank runs) at any
                 // size; only over-budget ones are additionally truncated.
                 let new = if s.len() > MSG_BUDGET {
-                    compress::compress_observation(s, MSG_BUDGET)
+                    compress::compress_observation_with(s, MSG_BUDGET, sq)
                 } else {
-                    compress::compress_lossless(s)
+                    compress_lossless_counted(s, sq)
                 };
                 if new != *s {
                     block["content"] = Value::String(new);
@@ -247,9 +249,9 @@ fn compress_block(block: &mut Value) {
                     if b.get("type").and_then(|t| t.as_str()) == Some("text") {
                         if let Some(text) = b.get("text").and_then(|t| t.as_str()) {
                             let new = if text.len() > MSG_BUDGET {
-                                compress::compress_observation(text, MSG_BUDGET)
+                                compress::compress_observation_with(text, MSG_BUDGET, sq)
                             } else {
-                                compress::compress_lossless(text)
+                                compress_lossless_counted(text, sq)
                             };
                             if new != text {
                                 b["text"] = Value::String(new);
@@ -266,6 +268,15 @@ fn compress_block(block: &mut Value) {
 
 fn serialized_size(v: &Value) -> usize {
     v.to_string().len()
+}
+
+/// Lossless pass that also counts sizes into the squeeze accumulator.
+fn compress_lossless_counted(s: &str, sq: &mut compress::SqueezeStats) -> String {
+    let out = compress::compress_lossless(s);
+    sq.raw += s.len() as u64;
+    sq.lossless += out.len() as u64;
+    sq.sent += out.len() as u64;
+    out
 }
 
 fn error_response(status: StatusCode, msg: &str) -> Response<Body> {
@@ -294,7 +305,7 @@ mod tests {
                 {"type": "text", "text": big(20_000), "cache_control": {"type": "ephemeral"}}
             ]
         });
-        compress_system(&mut body);
+        compress_system(&mut body, &mut compress::SqueezeStats::default());
         let blocks = body["system"].as_array().unwrap();
         assert_eq!(blocks[0]["text"], "small");
         assert!(blocks[0].get("cache_control").is_some());
@@ -316,7 +327,7 @@ mod tests {
                 }]
             }]
         });
-        compress_messages(&mut body);
+        compress_messages(&mut body, &mut compress::SqueezeStats::default());
         let c = body["messages"][0]["content"][0]["content"]
             .as_str()
             .unwrap();
@@ -340,7 +351,7 @@ mod tests {
                 }]
             }]
         });
-        compress_messages(&mut body);
+        compress_messages(&mut body, &mut compress::SqueezeStats::default());
         let inner = body["messages"][0]["content"][0]["content"]
             .as_array()
             .unwrap();
@@ -360,8 +371,8 @@ mod tests {
             ]
         });
         let before = body.clone();
-        compress_system(&mut body);
-        compress_messages(&mut body);
+        compress_system(&mut body, &mut compress::SqueezeStats::default());
+        compress_messages(&mut body, &mut compress::SqueezeStats::default());
         assert_eq!(body, before);
     }
 }
