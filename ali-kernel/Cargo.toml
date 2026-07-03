@@ -29,6 +29,7 @@ tokio-stream = "0.1"
 bytes = "1"
 hmac = "0.12"
 jsonwebtoken = "9"
+async-stream = "0.3"
 
 # Config stacking
 figment = { workspace = true }

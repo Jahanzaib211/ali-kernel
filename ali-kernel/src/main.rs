@@ -138,6 +138,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/models", get(models_handler))
         .route("/v1/chat/completions", post(chat_handler))
         .route("/v1/messages", post(anthropic_proxy::messages_handler))
+        .route("/v1/mcp/tools", get(mcp_tools_handler))
+        .route("/v1/events", get(events_handler))
         .route("/stats", get(usage_ledger::stats_handler))
         .route("/v1/approvals", post(approval_handler))
         .route("/v1/approvals/:request_id", get(approval_status_handler))
@@ -161,8 +163,11 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(json!({
         "status": "alive",
         "version": GATEWAY_VERSION,
-        "capabilities": ["rag_memory", "agentic_tools", "crate_aware_tools",
-                         "behavioral_shield", "eval_harness", "rlaif_capture"],
+        "capabilities": [
+            "rag_memory", "behavioral_shield", "agentic_tools",
+            "crate_aware_tools", "eval_harness", "rlaif_capture",
+            "human_gate", "streaming", "long_ctx_l55", "mcp_tools",
+        ],
         "backend": if backend_ok { "healthy" } else { "unreachable" },
         "backend_url": state.config.backend_base(),
         "backend_local": state.config.backend_url.contains("127.0.0.1"),
@@ -997,9 +1002,80 @@ async fn eval_handler(
         }
     }
 }
+/// GET /v1/mcp/tools — Model Context Protocol catalog. Returns the gateway
+/// native tool inventory as JSON-Schema, so any MCP client (headroom,
+/// serena, custom) can list tools without an OpenAI-format chat round-trip.
+async fn mcp_tools_handler(State(state): State<AppState>) -> Response {
+    let names = crate::config::default_enabled_tool_names();
+    let mut tools = Vec::with_capacity(names.len());
+    for n in names {
+        tools.push(serde_json::json!({
+            "name": n,
+            "description": format!("gateway-native tool: {n}"),
+            "inputSchema": {"type":"object","properties":{},"additionalProperties":true}
+        }));
+    }
+    let body = serde_json::json!({
+        "schema_version": "v1",
+        "server": { "name": "ali-kernel", "version": env!("CARGO_PKG_VERSION") },
+        "tools": tools,
+    });
+    Json(body).into_response()
+}
 
-/// POST /feedback — Claude-as-teacher submits a score and optional gold response.
-/// score < 3 with a gold answer writes a DPO preference pair (gold=chosen).
+/// GET /v1/events — Server-Sent Events stream of recent gateway pipeline lines
+/// (`PIPE L*` and `JOURNAL *`) from `gateway.log`. Consumers (TUI, dashboards)
+/// use this instead of polling `/stats`. The stream tails the file live;
+/// reconnects resume from the current end-of-file on the next call.
+async fn events_handler(State(state): State<AppState>) -> Response {
+    use axum::body::Body;
+    use axum::http::header;
+    use tokio_stream::StreamExt;
+
+    let log_path = std::path::PathBuf::from(&state.config.log_dir).join("gateway.log");
+    let stream = async_stream::stream! {
+        let mut last_pos: u64 = match std::fs::metadata(&log_path) {
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        };
+        loop {
+            if let Ok(metadata) = std::fs::metadata(&log_path) {
+                let size = metadata.len();
+                if size > last_pos {
+                        if let Ok(mut f) = std::fs::File::open(&log_path) {
+                        use std::io::{Read, Seek};
+                        let _ = f.seek(std::io::SeekFrom::Start(last_pos));
+                        let mut buf = vec![0u8; (size - last_pos) as usize];
+                        if f.read_exact(&mut buf).is_ok() {
+                            let chunk = String::from_utf8_lossy(&buf);
+                            // ANSI escapes (`\x1b[..m`) come from `tracing` colored
+                            // output; strip them so SSE consumers get plain text.
+                            let ansi = regex::Regex::new(r"\x1b\[[0-9;?]*[a-zA-Z]").unwrap();
+                            for line in chunk.lines() {
+                                let line = line.trim_end_matches('\n').trim_end_matches('\r');
+                                if line.is_empty() { continue; }
+                                let clean = ansi.replace_all(line, "");
+                                yield Ok::<_, std::io::Error>(bytes::Bytes::from(
+                                    format!("data: {}\n\n", clean)
+                                ));
+                            }
+                        }
+                        last_pos = size;
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    };
+    let body = Body::from_stream(stream.map(|r| r));
+    axum::response::Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(body)
+        .unwrap()
+}
+
 async fn feedback_handler(State(state): State<AppState>, Json(body): Json<Value>) -> Response {
     let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
     let score = body.get("score").and_then(|v| v.as_i64()).unwrap_or(5);
