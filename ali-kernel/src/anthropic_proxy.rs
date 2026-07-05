@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::info;
 
 use crate::usage_ledger::{UsageRecord, UsageScanner};
-use crate::{compress, AppState};
+use crate::{compress, tool_translator, AppState};
 
 const ANTHROPIC_API: &str = "https://api.anthropic.com";
 const SYSTEM_BUDGET: usize = 8_000;
@@ -55,6 +55,19 @@ pub async fn messages_handler(
 
     // Compress large message content blocks
     compress_messages(&mut body, &mut squeeze);
+
+    // Pillar 3b consolidation: route inbound tools[] through the
+    // shared translator. The Anthropic wire format is the flat
+    // {name, description, input_schema} shape, which our translator
+    // already knows how to parse. We don't *render* anywhere from
+    // here (the upstream is Anthropic), but we count and log so the
+    // gateway's observability line shows what tools the client sent.
+    let inbound_tools = body.get("tools").cloned().unwrap_or(Value::Null);
+    let tool_count = tool_translator::parse_anthropic_tools(&inbound_tools).len();
+    tracing::info!(
+        "PIPE L3 anthropic-proxy tool_count={} (parsed via shared translator)",
+        tool_count
+    );
 
     let after = serialized_size(&body);
     let pct = after
@@ -374,5 +387,35 @@ mod tests {
         compress_system(&mut body, &mut compress::SqueezeStats::default());
         compress_messages(&mut body, &mut compress::SqueezeStats::default());
         assert_eq!(body, before);
+    }
+}
+
+#[cfg(test)]
+mod tests_pillar3b {
+    /// Pillar 3b sanity test: parse_anthropic_tools accepts the same flat
+    /// shape that this proxy forwards upstream. Confirms the wire
+    /// contract is preserved through the shared translator.
+    #[test]
+    fn anthropic_tools_parse_via_shared_translator() {
+        let v = serde_json::json!([
+            {
+                "name": "read_file",
+                "description": "Read a file from the workspace",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"]
+                }
+            }
+        ]);
+        let tools = crate::tool_translator::parse_anthropic_tools(&v);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "read_file");
+        assert!(crate::tool_translator::validate_arguments(
+            &tools[0],
+            &serde_json::json!({"path": "/tmp"}),
+            &tools,
+        )
+        .is_ok());
     }
 }
