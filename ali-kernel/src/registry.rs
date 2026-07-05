@@ -129,6 +129,12 @@ pub struct ModelRegistry {
     pub user_overlay_path: Option<PathBuf>,
 }
 
+/// Canonical id baked in for the gateway's local flagship model. The
+/// runtime deployment may alias this id (e.g. via ALI_MODELS_TOML);
+/// the canonical id here is the fallback the gateway guarantees to
+/// resolve.
+pub const LOCAL_DEFAULT_ID: &str = "local-small-default";
+
 impl ModelRegistry {
     /// Load with the user-overlay path (typically ALI_MODELS_TOML).
     /// Always succeeds: missing file, parse error, or empty overlay
@@ -154,7 +160,9 @@ impl ModelRegistry {
             .entry("default".into())
             .or_insert(default_spec.clone());
         // The flagship local model is always present (baked in).
-        by_id.entry("ornith-9b".into()).or_insert(baked_ornith_9b());
+        by_id
+            .entry(LOCAL_DEFAULT_ID.into())
+            .or_insert(baked_local_small_default());
         ModelRegistry {
             by_id,
             default_spec,
@@ -259,7 +267,7 @@ impl PartialModelSpec {
 
 fn baked_defaults() -> HashMap<String, ModelSpec> {
     let mut m = HashMap::new();
-    m.insert("ornith-9b".into(), baked_ornith_9b());
+    m.insert(LOCAL_DEFAULT_ID.into(), baked_local_small_default());
     m.insert(
         "gpt-4o".into(),
         ModelSpec {
@@ -303,7 +311,7 @@ fn baked_defaults() -> HashMap<String, ModelSpec> {
     m
 }
 
-fn baked_ornith_9b() -> ModelSpec {
+fn baked_local_small_default() -> ModelSpec {
     ModelSpec {
         model_type: ModelType::LocalSmall,
         tool_format: WireFormat::OpenAI,
@@ -328,7 +336,7 @@ mod tests {
     fn baked_defaults_present() {
         let r = fresh();
         let ids = r.ids();
-        assert!(ids.contains(&"ornith-9b".into()), "ids: {ids:?}");
+        assert!(ids.contains(&LOCAL_DEFAULT_ID.into()), "ids: {ids:?}");
         assert!(ids.contains(&"gpt-4o".into()), "ids: {ids:?}");
         assert!(ids.contains(&"default".into()), "ids: {ids:?}");
         assert!(
@@ -346,10 +354,10 @@ mod tests {
         assert!(!spec.needs_two_pass);
         assert!(!spec.needs_constraint_mirror);
         assert_eq!(spec.max_context_tokens, 32_000);
-        // And critically: default returned for "ornith-9b" is the
+        // And critically: default returned for LOCAL_DEFAULT_ID is the
         // local-small spec, NOT the fallback (this is the
         // regression-prevention test).
-        let spec2 = r.for_model_id_or_default("ornith-9b");
+        let spec2 = r.for_model_id_or_default(LOCAL_DEFAULT_ID);
         assert_eq!(spec2.model_type, ModelType::LocalSmall);
         assert!(spec2.needs_two_pass);
         assert!(spec2.needs_constraint_mirror);
@@ -360,17 +368,18 @@ mod tests {
         let dir = std::env::temp_dir().join("ali-kernel-registry-test");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("models.toml");
+        // TOML section header for keys containing `-` must be quoted;
+        // use the canonical id verbatim.
         std::fs::write(
             &path,
-            r#"
-            [ornith-9b]
-            needs_two_pass = false
-            needs_constraint_mirror = false
-        "#,
+            format!(
+                "['{}']\nneeds_two_pass = false\nneeds_constraint_mirror = false\n",
+                LOCAL_DEFAULT_ID
+            ),
         )
         .unwrap();
         let r = ModelRegistry::load(&path);
-        let spec = r.for_model_id_or_default("ornith-9b");
+        let spec = r.for_model_id_or_default(LOCAL_DEFAULT_ID);
         // Operator flipped two flags.
         assert!(!spec.needs_two_pass, "overlay didn't override");
         assert!(!spec.needs_constraint_mirror);

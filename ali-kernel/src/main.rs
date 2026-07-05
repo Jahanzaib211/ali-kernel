@@ -363,6 +363,22 @@ async fn chat_handler(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // Pillar 2: client profile — emitted as a tracing event so the
+    // gateway's pipeline log records who is talking without changing
+    // dispatch behaviour yet (the Integration commit will route
+    // always_compress_system into L5.5).
+    let request_model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    tracing::info!(
+        "PIPE L0 client=\"{}\" source={:?} format={:?} request_model={:?}",
+        resolved.client.name,
+        resolved.client.source,
+        resolved.client.request_format,
+        request_model
+    );
+
     let human_gate = body
         .get("human_gate")
         .and_then(|v| v.as_bool())
