@@ -38,6 +38,7 @@ mod routing;
 mod security;
 mod session;
 mod tokens;
+mod tool_translator;
 mod tools;
 mod training;
 mod usage_ledger;
