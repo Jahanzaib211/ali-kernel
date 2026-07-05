@@ -23,16 +23,19 @@ mod critique;
 mod devloop;
 mod evals;
 mod events;
+mod handshake;
 mod human_gate;
 mod identity;
 mod intent;
 mod journal;
 mod logging;
 mod memory;
+mod passes;
 mod router;
+mod routing;
 mod security;
 mod session;
-mod handshake;
+mod tokens;
 mod tools;
 mod training;
 mod usage_ledger;
@@ -378,11 +381,7 @@ async fn chat_handler(
     // tool mode: passthrough (caller wins), native (gateway wins), hybrid (merged).
     let user_tools = body.get("tools");
     let user_choice = body.get("tool_choice");
-    let merged = handshake::merge_tools(
-        resolved.tool_mode,
-        user_tools,
-        user_choice,
-    );
+    let merged = handshake::merge_tools(resolved.tool_mode, user_tools, user_choice);
     let extra = if let Value::Object(map) = merged {
         Value::Object(map)
     } else {
@@ -394,11 +393,7 @@ async fn chat_handler(
         resolved.disabled_features,
     );
     if let Some(ref session) = resolved.session {
-        tracing::info!(
-            "session_sub={} jti={}",
-            session.sub,
-            session.jti,
-        );
+        tracing::info!("session_sub={} jti={}", session.sub, session.jti,);
     }
 
     // L6: Brain inference
@@ -652,9 +647,10 @@ async fn run_agentic_loop(
                                 Ok(output) => output,
                                 Err(e) => format!("Tool error: {e}"),
                             };
-                            let compressed = crate::compress::compress_observation(
+                            // L5.5: token-budgeted compression — exact cl100k_base.
+                            let compressed = crate::compress::compress_observation_by_tokens(
                                 &raw,
-                                crate::compress::DEFAULT_OBS_BUDGET,
+                                crate::compress::DEFAULT_OBS_BUDGET_TOKENS,
                             );
 
                             // Nervous system: record tool in journal
@@ -950,10 +946,7 @@ async fn benchmark_handler(State(state): State<AppState>) -> impl IntoResponse {
 /// Optional query params: `?limit=N` clamps the number of tasks run (default 5,
 /// max 20). Smaller N → faster response, fewer scores. Useful for `/health`-style
 /// smoke runs.
-async fn eval_handler(
-    State(state): State<AppState>,
-    Query(params): Query<EvalParams>,
-) -> Response {
+async fn eval_handler(State(state): State<AppState>, Query(params): Query<EvalParams>) -> Response {
     const EVAL_TIMEOUT_SECS: u64 = 60;
     let limit = params.limit.unwrap_or(5);
     let limit = limit.clamp(1, evals::MAX_LIMIT);
@@ -966,9 +959,7 @@ async fn eval_handler(
     });
 
     match tokio::time::timeout(Duration::from_secs(EVAL_TIMEOUT_SECS), fut).await {
-        Ok(Ok(Ok(report))) => {
-            Json(json!(serde_json::to_value(&report).unwrap())).into_response()
-        }
+        Ok(Ok(Ok(report))) => Json(json!(serde_json::to_value(&report).unwrap())).into_response(),
         Ok(Ok(Err(e))) => {
             tracing::error!("Eval failed: {e}");
             (
