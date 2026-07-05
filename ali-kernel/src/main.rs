@@ -25,6 +25,7 @@ mod devloop;
 mod evals;
 mod events;
 mod handshake;
+mod health;
 mod human_gate;
 mod identity;
 mod intent;
@@ -74,6 +75,10 @@ struct AppState {
     /// `~/.config/ali-kernel/models.toml`) plus the baked-in defaults
     /// shipped with the binary. See `src/registry.rs`.
     model_registry: Arc<registry::ModelRegistry>,
+    /// L4 backend health monitor: tokio task polls `backend_url/health`
+    /// (or `/v1/models`) every 10 s; result surfaced via `/v1/health/backend`
+    /// and as `backend_status` on `/health`. See `src/health.rs`.
+    backend_health: Arc<health::BackendHealth>,
 }
 
 #[tokio::main]
@@ -155,6 +160,26 @@ async fn main() -> anyhow::Result<()> {
         model_registry.ids()
     );
 
+    // L4 Backend Health Monitor — poll the configured backend every 10 s
+    // and keep a shared atomic snapshot. The snapshot is exposed via
+    // /v1/health/backend and folded into /health's `backend_status`
+    // field. The first poll runs immediately at startup; `tokio::time::interval`
+    // then ticks at the configured period.
+    let poll_interval_s = std::env::var("ALI_HEALTH_POLL_S")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(10);
+    let backend_health = Arc::new(health::BackendHealth::new(
+        &config.backend_base(),
+        poll_interval_s,
+    ));
+    let _poll_handle = backend_health.spawn_poll_loop(client.clone());
+    tracing::info!(
+        "L4 backend health monitor spawned (interval={}s, url={})",
+        poll_interval_s,
+        config.backend_base()
+    );
+
     let state = AppState {
         config: Arc::new(config.clone()),
         constitutions: Arc::new(constitutions),
@@ -167,10 +192,12 @@ async fn main() -> anyhow::Result<()> {
             config.log_dir.join("usage.jsonl"),
         )),
         model_registry,
+        backend_health,
     };
 
     let app = Router::new()
         .route("/health", get(health_handler))
+        .route("/v1/health/backend", get(health::backend_health_handler))
         .route("/v1/handshake", get(handshake_handler))
         .route("/v1/session", post(session_handler))
         .route("/v1/models", get(models_handler))
@@ -197,7 +224,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // The cheap on-demand probe stays (legacy clients read it). The
+    // cached snapshot is the source of truth for `backend_status`;
+    // /v1/health/backend exposes the full snapshot if you want history.
     let backend_ok = state.config.check_backend().await.is_ok();
+    let snap = state.backend_health.snapshot().await;
     Json(json!({
         "status": "alive",
         "version": GATEWAY_VERSION,
@@ -205,10 +236,18 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
             "rag_memory", "behavioral_shield", "agentic_tools",
             "crate_aware_tools", "eval_harness", "rlaif_capture",
             "human_gate", "streaming", "long_ctx_l55", "mcp_tools",
+            "model_registry", "health_monitor",
         ],
         "backend": if backend_ok { "healthy" } else { "unreachable" },
+        "backend_status": snap.status,
         "backend_url": state.config.backend_base(),
         "backend_local": state.config.backend_url.contains("127.0.0.1"),
+        "backend_health": {
+            "model": snap.model,
+            "last_check_ms": snap.last_check_ms,
+            "last_ok_ms": snap.last_ok_ms,
+            "consecutive_failures": snap.consecutive_failures,
+        },
         "model": state.config.backend_model,
     }))
 }
