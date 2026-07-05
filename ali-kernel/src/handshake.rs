@@ -48,7 +48,8 @@ pub fn manifest(config: &Config) -> Value {
             "human_gate",
             "streaming",
             "long_ctx_l55",
-            "mcp_tools"
+            "mcp_tools",
+            "model_registry"
         ],
         "defaults": {
             "tool_mode": if config.passthrough_tools { "openai-passthrough" } else { "native-tools" },
@@ -75,6 +76,22 @@ pub fn manifest(config: &Config) -> Value {
             "mcp_tools":         "/v1/mcp/tools",
         },
     })
+}
+
+/// Render the model registry as a JSON object: each model id → its spec,
+/// plus a `default` slot at the top of the response. Used by `main.rs` to
+/// publish the registry on `/v1/handshake`.
+pub fn manifest_models(registry: &crate::registry::ModelRegistry) -> Value {
+    let mut out = serde_json::Map::new();
+    for id in registry.ids() {
+        if let Some(spec) = registry.get(&id) {
+            out.insert(
+                id,
+                serde_json::to_value(spec).unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    Value::Object(out)
 }
 
 /// Mint a session token + claims for the client.

@@ -8,6 +8,7 @@ use axum::{
 };
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
@@ -31,6 +32,7 @@ mod journal;
 mod logging;
 mod memory;
 mod passes;
+mod registry;
 mod router;
 mod routing;
 mod security;
@@ -66,6 +68,11 @@ struct AppState {
     intent: Arc<intent::Intent>,
     identity: Arc<identity::IdentityStore>,
     ledger: Arc<usage_ledger::UsageLedger>,
+    /// L6 model registry: per-(id→spec) cognitive treatment. Loaded once
+    /// at startup from ALI_MODELS_TOML (defaults to
+    /// `~/.config/ali-kernel/models.toml`) plus the baked-in defaults
+    /// shipped with the binary. See `src/registry.rs`.
+    model_registry: Arc<registry::ModelRegistry>,
 }
 
 #[tokio::main]
@@ -121,6 +128,32 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(130))
         .build()?;
 
+    // L6 Model Registry — load early so startup fails loudly if a
+    // mandatory model spec can't be parsed. The path is overridable via
+    // ALI_MODELS_TOML. Default: ~/.config/ali-kernel/models.toml.
+    let models_toml_path = std::env::var("ALI_MODELS_TOML")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("ali-kernel")
+                .join("models.toml")
+        });
+    if !models_toml_path.exists() {
+        // Best-effort touch — operators get an empty file to edit.
+        if let Some(parent) = models_toml_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&models_toml_path, "");
+    }
+    let model_registry = Arc::new(registry::ModelRegistry::load(&models_toml_path));
+    tracing::info!(
+        "Model registry loaded from {} ({} entries): {:?}",
+        models_toml_path.display(),
+        model_registry.ids().len(),
+        model_registry.ids()
+    );
+
     let state = AppState {
         config: Arc::new(config.clone()),
         constitutions: Arc::new(constitutions),
@@ -132,6 +165,7 @@ async fn main() -> anyhow::Result<()> {
         ledger: Arc::new(usage_ledger::UsageLedger::new(
             config.log_dir.join("usage.jsonl"),
         )),
+        model_registry,
     };
 
     let app = Router::new()
@@ -192,7 +226,17 @@ async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 /// GET /v1/handshake — discovery manifest. No auth required.
 async fn handshake_handler(State(state): State<AppState>) -> impl IntoResponse {
-    Json(handshake::manifest(&state.config))
+    let mut m = handshake::manifest(&state.config);
+    // Embed the loaded model registry so clients can pick an id they
+    // know is wired up. The `default` slot is always present (Registry
+    // Fallback per the v3.1 plan).
+    if let Value::Object(ref mut map) = m {
+        map.insert(
+            "available_models".into(),
+            handshake::manifest_models(&state.model_registry),
+        );
+    }
+    Json(m)
 }
 
 /// POST /v1/session — mint a short-lived JWT scoped to a tool mode and feature list.
