@@ -174,6 +174,20 @@ impl ModelRegistry {
         self.by_id.get(id)
     }
 
+    /// Alias a model id (typically the runtime `backend_model` from
+    /// `.env`) to the local flagship spec. Convenient for deployments
+    /// where the operator's chosen runtime id isn't the canonical
+    /// `local-small-default`. After this call, lookup-by-id for the
+    /// alias returns the same spec as the canonical id.
+    pub fn alias_local_default(&mut self, alias: &str) {
+        if alias.is_empty() || alias == LOCAL_DEFAULT_ID {
+            return;
+        }
+        if let Some(local) = self.by_id.get(LOCAL_DEFAULT_ID).cloned() {
+            self.by_id.insert(alias.to_string(), local);
+        }
+    }
+
     /// **Registry Fallback**: if `id` is unknown, returns the `default`
     /// profile (never panics, never returns None). Operators get the
     /// conservative treatment and can refine by adding `models.toml`

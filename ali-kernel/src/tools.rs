@@ -127,7 +127,55 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
             .and_then(|v| v.as_str())
             .unwrap_or("{}");
 
-        let args: Value = serde_json::from_str(args_str).unwrap_or(json!({}));
+        // L3 Tool Firewall (v3.1 L3) — schema-aware validation gates
+        // dispatch. v3.1 ships two layers:
+        //   (a) Native-tools allow-list — the gateway won't dispatch to
+        //       a tool name not in `default_enabled_tool_names()`. Caps
+        //       the sandbox blast radius.
+        //   (b) Args parse — if `arguments` isn't valid JSON, we surface
+        //       the parse error as a `tool_result` block and skip the
+        //       sandbox. The schema-level validation (per-tool
+        //       parameters_schema checks) lands when we thread
+        //       user-supplied tools[] through `execute_tools` in v3.2.
+        if !crate::config::default_enabled_tool_names()
+            .iter()
+            .any(|n| n == name)
+        {
+            tracing::warn!(
+                "L3 Tool Firewall: rejecting tool name '{}' — not in native allow-list",
+                name
+            );
+            results.push(json!({
+                "tool_call_id": id,
+                "role": "tool",
+                "name": name,
+                "content": format!(
+                    "Tool Firewall rejection: '{name}' is not in the gateway's allow-list. \
+                     The dispatch refused; ask the user to add the tool or pick a different one."
+                ),
+            }));
+            continue;
+        }
+
+        let args: Value = match serde_json::from_str::<Value>(args_str) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "L3 Tool Firewall: rejecting tool call '{}' — args not valid JSON: {e}",
+                    name
+                );
+                results.push(json!({
+                    "tool_call_id": id,
+                    "role": "tool",
+                    "name": name,
+                    "content": format!(
+                        "Tool Firewall rejection: arguments for '{name}' are not valid JSON ({e}). \
+                         Resubmit with a JSON object."
+                    ),
+                }));
+                continue;
+            }
+        };
 
         let result = dispatch_single_tool(name, &args, config).await;
         let raw = match result {

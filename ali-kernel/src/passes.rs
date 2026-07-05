@@ -159,7 +159,11 @@ pub async fn dispatch(
         "[PRIOR REASONING — already planned; do not re-plan; produce the final answer now]\n{}",
         &reasoning[..reasoning.len().min(1200)]
     );
-    let sys_with_plan = format!("{}\n\n{}", sys_existing, plan_block);
+    // Apply the intent preamble (Diagnostic / DevLoop / etc.) BEFORE
+    // the existing system, so the per-intent treatment dominates
+    // without diluting the constituent / memory / identity context.
+    let preamble = crate::routing::preamble_for(intent);
+    let sys_with_plan = format!("{preamble}\n\n{sys_existing}\n\n{plan_block}");
     let user_dead_last = if cons.is_empty() {
         format!("{user_msg}\n\nNow produce the final answer (not another plan).")
     } else {

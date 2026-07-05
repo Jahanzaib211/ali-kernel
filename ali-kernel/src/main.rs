@@ -152,7 +152,13 @@ async fn main() -> anyhow::Result<()> {
         }
         let _ = std::fs::write(&models_toml_path, "");
     }
-    let model_registry = Arc::new(registry::ModelRegistry::load(&models_toml_path));
+    let mut registry_init = registry::ModelRegistry::load(&models_toml_path);
+    // Alias the operator's configured `backend_model` (the runtime
+    // model id from `.env`) to the local flagship spec so request-shape
+    // lookups work whether the client sends the canonical id or the
+    // operator's chosen id.
+    registry_init.alias_local_default(&config.backend_model);
+    let model_registry = Arc::new(registry_init);
     tracing::info!(
         "Model registry loaded from {} ({} entries): {:?}",
         models_toml_path.display(),
@@ -250,6 +256,37 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
         },
         "model": state.config.backend_model,
     }))
+}
+
+/// Append the v3.1 cognitive-routing headers to a response. The
+/// three headers are observation-only — they don't change dispatch
+/// behaviour but let clients verify what the gateway decided.
+fn append_ali_headers(
+    response: Response,
+    intent: routing::Intent,
+    passes_label: &'static str,
+    mirror_label: &'static str,
+) -> Response {
+    let intent_str: &'static str = match intent {
+        routing::Intent::Diagnostic => "diagnostic",
+        routing::Intent::DevLoop => "dev_loop",
+        routing::Intent::Extraction => "extraction",
+        routing::Intent::Neutral => "neutral",
+    };
+    let (mut parts, body) = response.into_parts();
+    parts.headers.insert(
+        axum::http::HeaderName::from_static("x-ali-intent"),
+        axum::http::HeaderValue::from_static(intent_str),
+    );
+    parts.headers.insert(
+        axum::http::HeaderName::from_static("x-ali-passes"),
+        axum::http::HeaderValue::from_static(passes_label),
+    );
+    parts.headers.insert(
+        axum::http::HeaderName::from_static("x-ali-mirror"),
+        axum::http::HeaderValue::from_static(mirror_label),
+    );
+    Response::from_parts(parts, body)
 }
 
 async fn models_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -459,6 +496,30 @@ async fn chat_handler(
     let user_prompt = last_user_msg.to_string();
     tracing::info!("PIPE L3 route={route_name} temp={final_temp:.1}");
 
+    // v3.1 Integration: per-intent classification + model spec lookup.
+    // The `routing` module's `classify` is the L3 classifier that
+    // decides the preamble + constraint-mirror treatment; the model
+    // registry tells us which backend we're dispatching against and
+    // whether two-pass is needed. Together they drive the dispatch
+    // decision at L6.
+    let intent_label = routing::classify(&user_prompt);
+    let model_spec = state.model_registry.for_model_id_or_default(&request_model);
+    let constraint_applied = model_spec.needs_constraint_mirror
+        && !routing::extract_constraints(&user_prompt).is_empty();
+    let two_pass_enabled = model_spec.needs_two_pass
+        && matches!(
+            intent_label,
+            routing::Intent::Diagnostic | routing::Intent::Neutral
+        )
+        && std::env::var("ALI_INTENT_ROUTING").is_ok();
+    tracing::info!(
+        "PIPE L3 intent={:?} model_spec_type={:?} two_pass={} mirror={}",
+        intent_label,
+        model_spec.model_type,
+        two_pass_enabled,
+        constraint_applied
+    );
+
     // L4: Episodic memory retrieval
     let memories = memory::retrieve(&user_prompt, &state.config).await;
     tracing::info!("PIPE L4 memories={}", memories.len());
@@ -496,25 +557,68 @@ async fn chat_handler(
         tracing::info!("session_sub={} jti={}", session.sub, session.jti,);
     }
 
-    // L6: Brain inference
-    match brain::infer(
-        &state.client,
-        &state.config,
-        assembled,
-        final_temp,
-        max_tokens,
-        stream,
-        extra,
-    )
-    .await
-    {
+    // L6: Brain inference — routes through passes::dispatch when the
+    // model spec says needs_two_pass AND the intent supports it
+    // (Diagnostic / Neutral). Gated behind ALI_INTENT_ROUTING=1 so the
+    // default behavior is unchanged.
+    let extra_for_two_pass = extra.clone();
+    let l6_resp: anyhow::Result<brain::BrainResponse> = if two_pass_enabled {
+        match passes::dispatch(
+            &state.client,
+            &state.config,
+            intent_label,
+            assembled.clone(),
+            final_temp,
+            stream,
+            extra_for_two_pass,
+        )
+        .await
+        {
+            Ok(r) => Ok(r),
+            Err(e) => {
+                tracing::warn!("two-pass dispatch error ({e}); falling back to brain::infer");
+                brain::infer(
+                    &state.client,
+                    &state.config,
+                    assembled,
+                    final_temp,
+                    max_tokens,
+                    stream,
+                    extra,
+                )
+                .await
+            }
+        }
+    } else {
+        brain::infer(
+            &state.client,
+            &state.config,
+            assembled,
+            final_temp,
+            max_tokens,
+            stream,
+            extra,
+        )
+        .await
+    };
+
+    match l6_resp {
         Err(e) => {
             tracing::error!("Brain error: {e}");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": e.to_string()})),
-            )
-                .into_response()
+            return append_ali_headers(
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": e.to_string()})),
+                )
+                    .into_response(),
+                intent_label,
+                if two_pass_enabled {
+                    "two-pass"
+                } else {
+                    "single"
+                },
+                if constraint_applied { "applied" } else { "off" },
+            );
         }
 
         Ok(brain::BrainResponse::Streaming(s)) => {
@@ -527,13 +631,23 @@ async fn chat_handler(
                 })
             });
             let body = Body::from_stream(mapped);
-            Response::builder()
+            let response = Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, "text/event-stream")
                 .header(header::CACHE_CONTROL, "no-cache")
                 .header("X-Request-Id", &request_id)
                 .body(body)
-                .unwrap()
+                .unwrap();
+            return append_ali_headers(
+                response,
+                intent_label,
+                if two_pass_enabled {
+                    "two-pass"
+                } else {
+                    "single"
+                },
+                if constraint_applied { "applied" } else { "off" },
+            );
         }
 
         Ok(brain::BrainResponse::Complete(response)) => {
@@ -641,12 +755,22 @@ async fn chat_handler(
             }
 
             let _ = headers; // auth header forwarded to llama-server implicitly
-            Response::builder()
+            let response = Response::builder()
                 .status(200)
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("X-Request-Id", &request_id)
                 .body(Body::from(serde_json::to_string(&response).unwrap()))
-                .unwrap()
+                .unwrap();
+            return append_ali_headers(
+                response,
+                intent_label,
+                if two_pass_enabled {
+                    "two-pass"
+                } else {
+                    "single"
+                },
+                if constraint_applied { "applied" } else { "off" },
+            );
         }
     }
 }
