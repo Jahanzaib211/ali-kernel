@@ -74,3 +74,69 @@ Production call-site integration lands in v3.1.
   empty-recovery, and a staticity self-test for the constraint mirror
 - `~/ali-bench/elite_gauntlet.py` — full 5-route × 5-test harness
 - `~/ali-bench/symmetric_*.json` — per-route raw OpenAI responses
+
+---
+
+## v3.1 Universal Translation Layer — observability tests
+
+After v3.1 landed, every chat response carries `X-Ali-Intent` /
+`X-Ali-Passes` / `X-Ali-Mirror`. The matrix below verifies those headers
+match the dispatch decision (gateway PID 2156306, 2026-07-05).
+
+| Prompt | `X-Ali-Intent` | `X-Ali-Passes` | `X-Ali-Mirror` | Body |
+|---|---|---|---|---|
+| "PONG" (greeting)         | `neutral`    | `single` | `off`    | "PONG" (status='alive')  |
+| "Find the bug and explain why this one-liner crashes. for n in nums: if n%2==0: total += n; total." with `ALI_INTENT_ROUTING=1` | `diagnostic` | `two-pass` | `off` | clean diagnosis, no code rewrite |
+| Same prompt, `ALI_INTENT_ROUTING` unset | `diagnostic` | `single` | `off` | model still rewrites (no two-pass gating) |
+
+The diagnostic intent path is the regression target: T4 in the original
+5-test gauntlet. Pre-v3.1, the gateway output a code fix. Post-v3.1
+(with `ALI_INTENT_ROUTING=1`), it emits a clear diagnosis because the
+Diagnostic preamble + two-pass displacement reach the model.
+
+### Model registry coverage
+
+`GET /v1/handshake → available_models` exposes:
+
+- `local-small-default` — the canonical local flagship (`needs_two_pass=true`,
+  `needs_constraint_mirror=true`, `typical_thinking=500`)
+- `gpt-4o` — `RemoteLarge`, no two-pass, no mirror, OpenAI tools
+- `claude-3-5-sonnet-20241022` — `RemoteLarge`, no two-pass, no mirror,
+  Anthropic tools
+- `claude-3-5-haiku-20241022` — `RemoteLarge`, no two-pass, no mirror,
+  Anthropic tools
+- `default` — the **Registry Fallback** (RemoteLarge, no two-pass,
+  no mirror, OpenAI tools). Applied to any unknown model id; the
+  gateway never panics.
+
+### Tool Firewall coverage
+
+`POST /v1/chat/completions` with a tool call to a non-allow-listed name:
+
+```json
+{"name": "rm_rf", "arguments": "{}"}
+```
+
+Response passes the Tool Firewall at L7; `dispatch_single_tool` is never
+invoked. The chat handler emits a `tool_result` block:
+
+```json
+{"role": "tool", "name": "rm_rf",
+ "content": "Tool Firewall rejection: 'rm_rf' is not in the gateway's allow-list. ..."
+}
+```
+
+so the model can self-correct on the next turn.
+
+---
+
+## Files
+
+- `~/ali-bench/gauntlet*.out` — captured run outputs
+- `~/ali-bench/elite_transform.py` — Python transformer with the displacement
+  fix, kill-switch fallback, cost-based `max_tokens`, Instructor-style
+  empty-recovery, and a staticity self-test for the constraint mirror
+- `~/ali-bench/elite_gauntlet.py` — full 5-route × 5-test harness
+- `~/ali-bench/symmetric_*.json` — per-route raw OpenAI responses
+- `ali-kernel/src/registry.rs`, `routing.rs`, `passes.rs`,
+  `tool_translator.rs`, `health.rs` — Rust primitives backing v3.1

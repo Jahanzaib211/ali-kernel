@@ -17,8 +17,80 @@ Final unit-test count: **88 in `ali-kernel` + 3 in `ali-tui`, all green.** `carg
 The Python prototype at `~/ali-bench/elite_transform.py` (the architecture these modules are ported from) achieves stable 5/5 on the 5-test capability gauntlet. The Rust primitives now make that same architecture available natively in the binary so future iterations can move beyond the Python harness.
 
 Other adjacent work tracked elsewhere:
-- `~/ali-bench/` — Python prototype, gauntlet driver (kept under `/tmp/ali-bench` for now; co-locating in-repo is a doc decision).
+- `~/ali-bench/` — Python prototype, gauntlet driver (kept under `/tmp/ali-bench` for now; co-locating in repo is a doc decision).
 - Aider smoke-tested against the gateway as the first confirmed headless agent CLI; full 5-agent × 5-route × 5-task matrix is Phase 9 of the plan at `~/.local/share/opencode/plans/agent-matrix-elite.md`.
+
+## 2026-07-05 update (later session) — v3.1 Universal Translation Layer
+
+Three pillars plus four Legendary upgrades landed, ending with the
+production integration commit. The gateway went from a single-backend
+proxy to a model-agnostic, client-agnostic translation layer.
+
+**New modules**
+
+- **`src/registry.rs`** — `ModelRegistry` loads `~/.config/ali-kernel/models.toml`
+  on top of baked defaults (`local-small-default`, `gpt-4o`,
+  `claude-3-5-sonnet-20241022`, `claude-3-5-haiku-20241022`,
+  `default`). Field-level merge of user overlay over baked entries.
+  `for_model_id_or_default()` is the v3.1 **Registry Fallback**: any unknown
+  model id returns the conservative `default` profile (remote_large, no
+  two-pass, no mirror, OpenAI tool format) without panicking.
+  Operator's `backend_model` from `.env` is auto-aliased to the local
+  flagship via `alias_local_default()`.
+- **`src/handshake.rs`** — `ClientProfile { name, source, default_tool_mode,
+  request_format, system_prompt_strategy, always_compress_system }`. Detection
+  priority: explicit `X-Ali-Client` header → User-Agent substring match
+  (aider, continue-dev, claude-code, cursor, openhands, cline, kilo)
+  → unknown fallback. `ResolvedRequest` gained a `client` field.
+- **`src/tool_translator.rs`** — neutral `Tool { name, description,
+  parameters_schema, strict }` + parsers (OpenAI, Anthropic) + renderers +
+  GBNF grammar emission (`gbnf_for_tools`). Closes the **Tool Firewall**:
+  `validate_arguments(tool, args, known_tools)` blocks UnknownTool,
+  MissingRequired, TypeMismatch, EnumViolation, and (strict) UnknownField
+  before sandbox dispatch. Sandbox never sees bad args.
+- **`src/health.rs`** — `BackendHealth` async monitor polls
+  `backend_url/health` (loopback) or `/v1/models` (remote) every 10 s.
+  `Status { Healthy | Degraded | Down }` with `consecutive_failures`
+  classifier (3+ flips to Down). Exposes `GET /v1/health/backend` and
+  embeds `backend_status` + `backend_health` in the canonical `/health`.
+
+**Wiring (integration commit `49ebcb2`)**
+
+- `chat_handler` now classifies via `routing::classify` and looks up
+  `ModelSpec`. When `model_spec.needs_two_pass ∧
+  matches!(intent, Diagnostic|Neutral) ∧ ALI_INTENT_ROUTING=1`,
+  the L6 forwarder branches to `passes::dispatch`; otherwise the
+  default `brain::infer` path runs.
+- `passes::dispatch` pass-2 system message now prepends
+  `routing::preamble_for(intent)` so the Diagnostic preamble reaches
+  the model (a v3.0-port gap that was hiding until the integration
+  commit).
+- `tools.rs::execute_tools` runs the Tool Firewall before
+  `dispatch_single_tool`: refuses tool names not in
+  `config::default_enabled_tool_names()`, refuses unparseable args,
+  surfaces both as a `tool_result` rejection block.
+- Every chat response carries three new headers: `X-Ali-Intent`,
+  `X-Ali-Passes` (`two-pass`|`single`), `X-Ali-Mirror` (`applied`|`off`).
+  Default OFF (no env var) → reads as `neutral/single/off` on every
+  response: observability only, no behaviour change.
+
+**Verified live (gateway PID 2156306, 2026-07-05)**
+
+- `POST /v1/chat/completions` default path → `x-ali-intent: neutral
+  x-ali-passes: single x-ali-mirror: off`.
+- `ALI_INTENT_ROUTING=1` + "Find the bug and explain..." → `x-ali-intent:
+  diagnostic x-ali-passes: two-pass x-ali-mirror: off`. Model now gives a
+  clean diagnosis (`Bug: total is never initialized...`) instead of
+  rewriting.
+- `GET /v1/handshake` returns the full `available_models` map (5 baked
+  entries + operator's `backend_model` alias).
+- `GET /v1/health/backend` returns the polled snapshot
+  (`status / model / consecutive_failures / last_*_ms`).
+
+**Test count**: 114 unit tests + 3 ali-tui, all green. `cargo fmt --check`,
+`make cross-ref-check`, `cargo build --release` clean.
+
+**7 commits**, awaiting owner OK before push per AGENTS.md.
 
 ## 2026-07-02 update (later session) — TUI rebuild + Anthropic proxy compression
 

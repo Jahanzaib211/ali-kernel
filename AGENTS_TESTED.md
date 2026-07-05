@@ -97,3 +97,39 @@ single base-URL swap.
 - Two-pass think-then-answer dispatch (`src/passes.rs`) is wired as Rust
   primitives; main.rs call-site integration is v3.1 — gating env var will
   be `ALI_INTENT_ROUTING=1`.
+
+## v3.1 additions (2026-07-05)
+
+The following surfaces are now live alongside the agent install + wiring
+notes above:
+
+### Cognitive-routing response headers (every chat response)
+
+Every `/v1/chat/completions` response (streaming and non-streaming) carries:
+
+- `X-Ali-Intent`: `diagnostic` | `dev_loop` | `extraction` | `neutral`
+- `X-Ali-Passes`:  `two-pass` | `single`
+- `X-Ali-Mirror`:  `applied` | `off`
+
+By default (env var unset) all three read `neutral / single / off` —
+the gateway never engages the routing logic unless `ALI_INTENT_ROUTING=1`
+is set. With the env flag on, an Aider request asking "find the bug and
+explain" returns `diagnostic / two-pass / off` and the model emits a
+diagnosis (no code rewrite).
+
+### `/v1/handshake` advertises the model registry
+
+`GET /v1/handshake` now includes `available_models`: a map from model
+id → `ModelSpec`. Clients can pick an id they know is wired up before
+sending the first request. The legacy install took all backends as
+"local small"; the new gateway knows whether it's a small local model
+(`LocalSmall`) or a remote large one (`RemoteLarge`) and applies the
+right cognitive treatment automatically.
+
+### `/v1/health/backend` and `backend_status` on `/health`
+
+A new tokio task polls the configured backend's `/health` (loopback)
+or `/v1/models` (remote) every 10 s and keeps an atomic snapshot. The
+endpoint exposes the full snapshot; the canonical `/health` gains a
+`backend_status` field (`healthy | degraded | down`). Poll interval
+overridable via `ALI_HEALTH_POLL_S`.

@@ -1,6 +1,6 @@
 # Ali Kernel — Roadmap & Crate Arsenal
 
-_Last updated: 2026-07-05._ Companion to `STATUS.md` (live status) and the engineering plan.
+_Last updated: 2026-07-05 (v3.1 Universal Translation Layer landed)._ Companion to `STATUS.md` (live status) and the engineering plan.
 
 ## Vision
 
@@ -19,8 +19,8 @@ sparingly.
 | **0** | Stand up + dogfood + version control | ✅ done |
 | **0.5** | Behavioral shield (set-and-forget) | ✅ done — eval discriminates at **94%** |
 | **0.75** | Ali TUI + human gate | ✅ done — elite approval UI with SSE streaming |
-| 1 | Sovereign invariants (per-request attestation, 127.0.0.1, determinism) | next options |
-| 2 | Telemetry spine (broadcast + SSE) | planned |
+| **1** | Token-accurate routing primitives | ✅ done — `tokens.rs` (tiktoken-rs), `routing.rs` (intent + constraint mirror), `passes.rs` (two-pass dispatch with kill-switch) |
+| **2** | Universal Translation Layer (v3.1) | ✅ done — `registry.rs` model registry + Registry Fallback, `handshake.rs` client profiles (UA + X-Ali-Client), `tool_translator.rs` neutral Tool + Tool Firewall, `health.rs` async backend poll, integration commit wires `passes::dispatch` and emits `X-Ali-*` response headers |
 | 3 | Memory integrity + single-binary vector (Merkle vault, kill Qdrant) | planned |
 | 4 | Runtime resilience (guardian + human gate) | planned |
 | 5 | Harness layer (handshake/JWT + meta-learner + MCP) | planned |
