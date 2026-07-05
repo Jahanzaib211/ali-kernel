@@ -5,7 +5,7 @@
 
 # Runtime + generated data (not source)
 logs/
-training/
+/training/
 evals/eval_scores.jsonl
 ornith-generated/
 .claude/*

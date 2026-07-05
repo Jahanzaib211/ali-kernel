@@ -14,6 +14,8 @@ Final unit-test count: **88 in `ali-kernel` + 3 in `ali-tui`, all green.** `carg
 
 **Note on C.3 production wiring**: the `passes::dispatch()` function is implemented and unit-tested, but main.rs hasn't yet opted in to call it on every request. Call sites that pass `extra: Value::Null` would need a `passes::dispatch(client, config, intent, ...)` switch with an `ALI_INTENT_ROUTING=1` env flag. That's a v3.1 integration step; this commit ships the primitives.
 
+> **UPDATE (2026-07-05, superseding the note above)**: C.3 is now wired. `main.rs:566` calls `passes::dispatch(...)`, gated behind `ALI_INTENT_ROUTING` (`main.rs:514`) exactly as described — landed in commit `49ebcb2` (`feat(routing): wire passes::dispatch + X-Ali-* headers + Tool Firewall close`). The primitives are no longer the ceiling; two-pass dispatch runs in-binary when the env flag is set.
+
 The Python prototype at `~/ali-bench/elite_transform.py` (the architecture these modules are ported from) achieves stable 5/5 on the 5-test capability gauntlet. The Rust primitives now make that same architecture available natively in the binary so future iterations can move beyond the Python harness.
 
 Other adjacent work tracked elsewhere:

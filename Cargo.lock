@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ali-kernel"
-version = "1.0.0"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "ali-tui"
-version = "1.0.0"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "bytes",
