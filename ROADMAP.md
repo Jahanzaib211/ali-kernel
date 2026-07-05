@@ -1,6 +1,6 @@
 # Ali Kernel — Roadmap & Crate Arsenal
 
-_Last updated: 2026-07-02._ Companion to `STATUS.md` (live status) and the engineering plan.
+_Last updated: 2026-07-05._ Companion to `STATUS.md` (live status) and the engineering plan.
 
 ## Vision
 
@@ -44,7 +44,7 @@ surface**, and our own rules say *minimize deps, run `cargo audit`, stay soverei
 |---|---|---|
 | Inference | **llama.cpp via HTTP** (current) | keep the sidecar — gives watchdog, restart, circuit-breaker. (FFI `llama-cpp-2`/`candle` embedding rejected: ~30% slower, kills the watchdog.) |
 | Local embeddings | **`candle-core` + `candle-transformers`** | in-process embeddings (<2ms) for RAG → replaces the `/v1/embeddings` round-trip (Phase 3, L4) |
-| Tokenization | **`tokenizers`** (HF) | exact token budget in `context.rs` instead of the 4-chars/token estimate (L5) |
+| Tokenization | **`tiktoken-rs`** (OpenAI cl100k_base port) | exact token budget in `context.rs`/`compress.rs` instead of the 4-chars/token estimate. Replaces the earlier `tokenizers` (HF) pick — tiktoken-rs is smaller and gives us OpenAI-compatible token accounting out of the box (L5). Added 2026-07-05. |
 | Vector search | **`sqlite-vec`** (via `rusqlite`) or **`hnsw_rs`** | single-binary ANN → **kills the Qdrant sidecar** (Phase 3) |
 | Fine-tuning | **unsloth / axolotl** (offline, Python) | LoRA on our `sft.jsonl` + `dpo_pairs.jsonl`; swap GGUF, re-eval |
 | _Consider later_ | `burn` (in-Rust training), `ort`/`tract` (ONNX small models) | only if we ever train/serve in-process |

@@ -1,6 +1,26 @@
 # Ali Kernel — Live Status
 
-_Last updated: 2026-07-02 (session: TUI keyboard fix + Anthropic proxy compression gaps)_
+_Last updated: 2026-07-05 (session: tiktoken-rs + intent routing + two-pass dispatch + agent matrix validation)_
+
+## 2026-07-05 update — Token-accurate routing primitives + agent matrix
+
+Three new Rust modules landed and went live in the binary without breaking any existing tests:
+
+- **`src/tokens.rs`** — `count_tokens(text) -> usize` via `tiktoken-rs` `cl100k_base`. Replaces the `chars / 4` heuristic in `compress.rs::compress_observation_with` (added a new `compress_observation_by_tokens` path that takes an exact token budget) and in `context.rs`'s L5 budget enforcement. The previously-config-driven `CHARS_PER_TOKEN = 4` constant is gone; context window math now uses real token counts.
+- **`src/routing.rs`** — `enum Intent { Diagnostic, DevLoop, Extraction, Neutral }` + `classify()`, `preamble_for()`, `extract_constraints()`, `assemble_messages()`. Pure functions of input — `extract_constraints` is verified byte-equal across consecutive calls via a staticity self-test, guaranteeing the llama.cpp KV-cache prefix is preserved when preambles are reused.
+- **`src/passes.rs`** — two-pass think-then-answer dispatch with the 8-second kill-switch and the displacement fix (pass-2 system message carries the plan; user spec is the LAST token the model sees). Falls back to single-pass with constraint mirror when pass-1 exceeds 8 s, and retries pass-2 once with 1500 tokens when the model emits only `reasoning_content` (the failure mode the Python prototype identified).
+
+Final unit-test count: **88 in `ali-kernel` + 3 in `ali-tui`, all green.** `cargo fmt --check`, `make cross-ref-check`, `cargo build --release` are clean. Gateway rebuilt and smoke-tested through Aider (`PONG C1 / C2 / C3`) at each binary restart.
+
+**Note on C.3 production wiring**: the `passes::dispatch()` function is implemented and unit-tested, but main.rs hasn't yet opted in to call it on every request. Call sites that pass `extra: Value::Null` would need a `passes::dispatch(client, config, intent, ...)` switch with an `ALI_INTENT_ROUTING=1` env flag. That's a v3.1 integration step; this commit ships the primitives.
+
+The Python prototype at `~/ali-bench/elite_transform.py` (the architecture these modules are ported from) achieves stable 5/5 on the 5-test capability gauntlet. The Rust primitives now make that same architecture available natively in the binary so future iterations can move beyond the Python harness.
+
+Other adjacent work tracked elsewhere:
+- `~/ali-bench/` — Python prototype, gauntlet driver (kept under `/tmp/ali-bench` for now; co-locating in-repo is a doc decision).
+- Aider smoke-tested against the gateway as the first confirmed headless agent CLI; full 5-agent × 5-route × 5-task matrix is Phase 9 of the plan at `~/.local/share/opencode/plans/agent-matrix-elite.md`.
+
+## 2026-07-02 update (later session) — TUI rebuild + Anthropic proxy compression
 
 ## 2026-07-02 update (later session) — TUI rebuild + Anthropic proxy compression
 
