@@ -46,7 +46,10 @@ pub fn encode_session(
     encode(&Header::default(), claims, &EncodingKey::from_secret(key))
 }
 
-pub fn decode_session(token: &str, key: &[u8]) -> Result<SessionClaims, jsonwebtoken::errors::Error> {
+pub fn decode_session(
+    token: &str,
+    key: &[u8],
+) -> Result<SessionClaims, jsonwebtoken::errors::Error> {
     let mut validation = Validation::default();
     validation.leeway = 5;
     let data = decode::<SessionClaims>(token, &DecodingKey::from_secret(key), &validation)?;

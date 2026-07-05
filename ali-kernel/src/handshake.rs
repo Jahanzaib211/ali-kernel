@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config::Config;
-use crate::session::{decode_session, ToolMode, SessionClaims};
+use crate::session::{decode_session, SessionClaims, ToolMode};
 
 pub const HEADER_TOOL_MODE: &str = "x-ali-tool-mode";
 pub const HEADER_DISABLE_FEATURES: &str = "x-ali-disable-features";
@@ -107,7 +107,10 @@ pub fn resolve_request(config: &Config, headers: &HeaderMap) -> ResolvedRequest 
     // 2. JWT claim wins over config default when present + valid.
     if let Some(auth) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(s) = auth.to_str() {
-            if let Some(token) = s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")) {
+            if let Some(token) = s
+                .strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+            {
                 if let Some(key) = crate::session::resolve_signing_key(config) {
                     if let Ok(claims) = decode_session(token, &key) {
                         session = Some(claims.clone());
@@ -164,7 +167,11 @@ pub fn parse_tool_mode(s: &str) -> Option<ToolMode> {
 ///
 /// Returns `Value::Object` containing either or both keys, ready to splat into the
 /// brain request body via `extra`.
-pub fn merge_tools(mode: ToolMode, user_tools: Option<&Value>, user_choice: Option<&Value>) -> Value {
+pub fn merge_tools(
+    mode: ToolMode,
+    user_tools: Option<&Value>,
+    user_choice: Option<&Value>,
+) -> Value {
     let native = json!(config_native_tools_schema());
 
     match mode {
@@ -194,7 +201,10 @@ pub fn merge_tools(mode: ToolMode, user_tools: Option<&Value>, user_choice: Opti
             let mut merged: Vec<Value> = config_native_tools_schema();
             if let Some(Value::Array(user_arr)) = user_tools {
                 for ut in user_arr {
-                    if !merged.iter().any(|n| tool_fingerprint(n) == tool_fingerprint(ut)) {
+                    if !merged
+                        .iter()
+                        .any(|n| tool_fingerprint(n) == tool_fingerprint(ut))
+                    {
                         merged.push(ut.clone());
                     }
                 }
@@ -251,4 +261,3 @@ fn config_native_tools_schema() -> Vec<Value> {
         })
         .collect()
 }
-

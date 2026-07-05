@@ -74,9 +74,7 @@ pub async fn run_suite_with_limit(
     constitutions: &Constitutions,
     limit: Option<usize>,
 ) -> Result<EvalReport> {
-    let effective_limit = limit
-        .map(|n| n.min(MAX_LIMIT))
-        .unwrap_or(MAX_LIMIT);
+    let effective_limit = limit.map(|n| n.min(MAX_LIMIT)).unwrap_or(MAX_LIMIT);
 
     let all_tasks = load_suite(config)?;
     let tasks: Vec<EvalTask> = all_tasks.into_iter().take(effective_limit).collect();

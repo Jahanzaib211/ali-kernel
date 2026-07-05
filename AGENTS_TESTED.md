@@ -14,7 +14,7 @@ single base-URL swap.
 ## Aider ✓ smoke PASS
 
 - **Install**: `uv tool install aider-chat` (venv-isolated, one-shot)
-- **Wiring**: `OPENAI_API_BASE=http://127.0.0.1:9000/v1 OPENAI_API_KEY=sk-noauth aider --model openai/ornith --no-git --no-auto-commits --message "..."`
+- **Wiring**: `OPENAI_API_BASE=http://127.0.0.1:9000/v1 OPENAI_API_KEY=sk-noauth aider --model openai/<model-id> --no-git --no-auto-commits --message "..."` (replace `<model-id>` with whatever the gateway advertises in `/v1/models`)
 - **Notes**: Aider is a litellm-fronted wrapper. The provider prefix `openai/`
   in the model id tells litellm to use the OpenAI request shape; the gateway
   sees a vanilla `/v1/chat/completions` call. Bonus: Aider carries its own
@@ -45,14 +45,15 @@ single base-URL swap.
     }
   }
   ```
-  Then invoke with `opencode run -m ali-kernel-gateway/ornith "your prompt"`.
+  Then invoke with `opencode run -m ali-kernel-gateway/<model-id> "your prompt"`.
 - **Caveat**: requires a config-file edit, not just env vars.
 
 ## Continue CLI ⚠ partial
 
 - **Install**: `bunx @continuedev/cli` (resolves the `cn` binary)
 - **Wiring**: needs `~/.continue/config.json` with an OpenAI-compatible
-  provider entry pointing at `http://127.0.0.1:9000/v1` and `model: ornith`.
+  provider entry pointing at `http://127.0.0.1:9000/v1` and `model: <model-id>`
+  (whatever the gateway advertises in `/v1/models`).
   The `-p` flag accepts a prompt for non-interactive use.
 - **Caveat**: bunx-cached binary lives in `/tmp/bunx-*`; not on `$PATH` by
   default. Env-var base-URL redirection NOT supported — config-file edit is
@@ -88,9 +89,9 @@ single base-URL swap.
   unchanged and never logged.
 - Loopback only: `127.0.0.1` binding is a hard invariant per CLAUDE.md.
   Never bind the gateway to `0.0.0.0`.
-- The model id literal is `ornith` in the gateway's `/v1/models` response,
-  but the tool-calling layer toggles between `native-tools`,
-  `openai-passthrough`, and `hybrid` per the request header
+- The model id literal in the gateway's `/v1/models` response is the
+  identifier chosen at deploy time. The tool-calling layer toggles between
+  `native-tools`, `openai-passthrough`, and `hybrid` per the request header
   `X-Ali-Tool-Mode` (see `handshake.rs` for the manifest). Most coding
   agents work best with `openai-passthrough`.
 - Two-pass think-then-answer dispatch (`src/passes.rs`) is wired as Rust
