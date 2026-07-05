@@ -25,7 +25,6 @@ use crate::security::Constitutions;
 use crate::session::ToolMode;
 
 const MAX_TOKENS: usize = 12_000;
-const CHARS_PER_TOKEN: usize = 4;
 const MAX_HISTORY_TURNS: usize = 10;
 
 /// Sentinel markers that delimit the tool-listing paragraphs in the SOUL/AGENT
@@ -67,7 +66,9 @@ pub fn apply_tool_mode_filter(system_content: &str, mode: ToolMode) -> String {
             while next.contains(ALI_TOOLS_START) {
                 let prev = next.clone();
                 next = block_pattern(&next);
-                if next == prev { break; }
+                if next == prev {
+                    break;
+                }
             }
             if next != system_content {
                 next.push_str(
@@ -164,31 +165,25 @@ pub async fn assemble(
         user_turns
     };
 
-    // Token budget enforcement (~4 chars/token)
-    let system_chars: usize = result
+    // Token budget enforcement — exact cl100k_base via crate::tokens.
+    // Replaces the old `chars / 4` heuristic so the model is never silently
+    // truncated beyond 12K tokens and never falls short either.
+    let system_used: usize = result
         .iter()
         .map(|m| {
-            m.get("content")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-                .len()
+            crate::tokens::count_tokens(m.get("content").and_then(|c| c.as_str()).unwrap_or(""))
         })
         .sum();
 
-    let budget_chars = MAX_TOKENS * CHARS_PER_TOKEN;
-    let mut used = system_chars;
-
+    let mut used = system_used;
     let mut trimmed: Vec<Value> = Vec::new();
     for msg in windowed.iter().rev() {
-        let msg_chars = msg
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .len();
-        if used + msg_chars > budget_chars {
+        let msg_tokens =
+            crate::tokens::count_tokens(msg.get("content").and_then(|c| c.as_str()).unwrap_or(""));
+        if used + msg_tokens > MAX_TOKENS {
             break;
         }
-        used += msg_chars;
+        used += msg_tokens;
         trimmed.push((*msg).clone());
     }
     trimmed.reverse();
@@ -228,7 +223,16 @@ mod tests {
     async fn assembles_system_message_from_constitutions() {
         let c = make_constitutions();
         let msgs = vec![json!({"role": "user", "content": "hello"})];
-        let result = assemble(&c, &[], "SYS", &msgs, temp_intent(), temp_identity(), ToolMode::Native).await;
+        let result = assemble(
+            &c,
+            &[],
+            "SYS",
+            &msgs,
+            temp_intent(),
+            temp_identity(),
+            ToolMode::Native,
+        )
+        .await;
         assert_eq!(result[0]["role"], "system");
         let content = result[0]["content"].as_str().unwrap();
         assert!(content.contains("SOUL"));
@@ -242,7 +246,16 @@ mod tests {
         let msgs: Vec<Value> = (0..15)
             .map(|i| json!({"role": "user", "content": format!("msg {i}")}))
             .collect();
-        let result = assemble(&c, &[], "SYS", &msgs, temp_intent(), temp_identity(), ToolMode::Native).await;
+        let result = assemble(
+            &c,
+            &[],
+            "SYS",
+            &msgs,
+            temp_intent(),
+            temp_identity(),
+            ToolMode::Native,
+        )
+        .await;
         // system msg + 10 user msgs
         assert_eq!(result.len(), 11);
         assert_eq!(result.last().unwrap()["content"], "msg 14");
@@ -257,7 +270,16 @@ mod tests {
             source: "qdrant".into(),
         }];
         let msgs = vec![json!({"role": "user", "content": "hi"})];
-        let result = assemble(&c, &mems, "SYS", &msgs, temp_intent(), temp_identity(), ToolMode::Native).await;
+        let result = assemble(
+            &c,
+            &mems,
+            "SYS",
+            &msgs,
+            temp_intent(),
+            temp_identity(),
+            ToolMode::Native,
+        )
+        .await;
         let system_msgs = result.iter().filter(|m| m["role"] == "system").count();
         assert_eq!(system_msgs, 1);
         assert!(result[0]["content"]

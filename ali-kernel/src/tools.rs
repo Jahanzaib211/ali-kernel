@@ -135,11 +135,17 @@ pub async fn execute_tools(response: Value, config: &Config) -> Value {
             Err(e) => format!("Tool error: {e}"),
         };
 
-        // L5.5: structurally compress the observation before it re-enters context.
-        let content =
-            crate::compress::compress_observation(&raw, crate::compress::DEFAULT_OBS_BUDGET);
-        if content.len() < raw.len() {
-            tracing::info!("PIPE L5.5 {name} {}→{} chars", raw.len(), content.len());
+        // L5.5: token-budgeted compression (exact cl100k_base via tiktoken-rs).
+        let content = crate::compress::compress_observation_by_tokens(
+            &raw,
+            crate::compress::DEFAULT_OBS_BUDGET_TOKENS,
+        );
+        if crate::tokens::count_tokens(&content) < crate::tokens::count_tokens(&raw) {
+            tracing::info!(
+                "PIPE L5.5 {name} {}→{} tokens",
+                crate::tokens::count_tokens(&raw),
+                crate::tokens::count_tokens(&content)
+            );
         }
 
         results.push(json!({

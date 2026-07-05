@@ -27,8 +27,17 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-/// Default char budget for a single observation (~2K tokens at ~4 chars/token).
+/// Default char budget for a single observation (legacy, char-based callers).
+/// For new code prefer `DEFAULT_OBS_BUDGET_TOKENS` paired with
+/// `compress_observation_by_tokens` — exact cl100k_base token accounting lives
+/// in `crate::tokens`.
 pub const DEFAULT_OBS_BUDGET: usize = 8000;
+
+/// Default token budget for a single observation (L5.5 should not forward more
+/// than this to the model). Replaces the old `DEFAULT_OBS_BUDGET = 8000` chars,
+/// which was a `chars / 4` approximation. With tiktoken-rs we count exact
+/// cl100k_base tokens.
+pub const DEFAULT_OBS_BUDGET_TOKENS: usize = 2000;
 
 /// Salient lines rescued from the elided middle are capped at this fraction
 /// of the budget (output may exceed budget by at most this much).
@@ -82,6 +91,49 @@ pub fn compress_observation_with(s: &str, budget: usize, stats: &mut SqueezeStat
     } else {
         stats.lossless += lossless.len().min(s.len()) as u64;
     }
+    stats.sent += out.len() as u64;
+    out
+}
+
+/// Token-budgeted compression: forward at most `token_budget` cl100k_base
+/// tokens. Replaces the char-based `compress_observation` for callers who
+/// care about exact token accounting (L7 tool forwarding, L5.5 dynamic
+/// compression). Internally calls `compress_observation` with a char ceiling
+/// derived from the token budget so existing smart-truncate logic remains
+/// unchanged.
+pub fn compress_observation_by_tokens(s: &str, token_budget: usize) -> String {
+    let char_cap = crate::tokens::token_to_chars_upper(token_budget);
+    let n = crate::tokens::count_tokens(s);
+    if n <= token_budget {
+        return s.to_string();
+    }
+    // Conservative: ask smart_truncate for a char budget equal to a known
+    // rough-upper bound on token_budget chars, then post-verify and re-shrink
+    // if the actual token count is still above budget.
+    let mut out = compress_observation(s, char_cap);
+    let mut rounds = 0usize;
+    while crate::tokens::count_tokens(&out) > token_budget && rounds < 4 {
+        // Shrink char cap by 25% per round. Bounded to keep worst-case bounded.
+        let next_cap = (out.len() * 3) / 4;
+        if next_cap < out.len() {
+            out = compress_observation(s, next_cap);
+        }
+        rounds += 1;
+    }
+    out
+}
+
+/// Same as `compress_observation_by_tokens`, accumulating pipeline sizes into
+/// `stats` so the ledger can split savings into provably-lossless vs lossy
+/// buckets.
+pub fn compress_observation_by_tokens_with(
+    s: &str,
+    token_budget: usize,
+    stats: &mut SqueezeStats,
+) -> String {
+    let out = compress_observation_by_tokens(s, token_budget);
+    stats.raw += s.len() as u64;
+    stats.lossless += compress_lossless(s).len().min(s.len()) as u64;
     stats.sent += out.len() as u64;
     out
 }

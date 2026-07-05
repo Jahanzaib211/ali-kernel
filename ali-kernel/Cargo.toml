@@ -31,6 +31,10 @@ hmac = "0.12"
 jsonwebtoken = "9"
 async-stream = "0.3"
 
+# L5.5 token accounting: tiktoken-rs replaces the chars/4 heuristic so we
+# count exact cl100k_base tokens for compression budget and L7 tool-cap math.
+tiktoken-rs = "0.7"
+
 # Config stacking
 figment = { workspace = true }
 toml = { workspace = true }
