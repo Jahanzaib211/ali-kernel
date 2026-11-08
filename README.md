@@ -7,7 +7,6 @@
 memory, tools, routing, or the behavioral shield. The real power is combining ecosystem access with an
 iterative develop → build → test loop — every capability benefits whichever model is behind it.
 
-[![Build](https://img.shields.io/badge/build-passing-brightgreen)](#)
 [![Rust](https://img.shields.io/badge/rust-1.78%2B-orange)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-blue)](#license)
 [![Model](https://img.shields.io/badge/model-Ornith--1.0--9B--Q4__K__M-purple)](#)
@@ -418,3 +417,11 @@ summary and won't be kept in perfect lockstep with it.
 ## License
 
 MIT — use freely, ship responsibly.
+
+---
+
+## Work with me
+
+Built by Jahanzaib Ali, Founder & Systems Engineer at [AliLabsX](https://alilabsx.com). I don't rent, I build: I run my own hardware and keep my own data.
+
+[Jahanzaib@alilabsx.com](mailto:Jahanzaib@alilabsx.com) · [alilabsx.com](https://alilabsx.com) · [LinkedIn](https://www.linkedin.com/in/jahanzaib-ali-labsx)
